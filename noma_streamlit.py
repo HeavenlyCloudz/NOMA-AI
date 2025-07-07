@@ -2,8 +2,10 @@
 import streamlit as st
 from PIL import Image
 import numpy as np
-import tensorflow
+import tensorflow as tf
 from tensorflow.keras.models import load_model
+import cv2
+import matplotlib.pyplot as plt
 
 # Load your trained model
 model = load_model('noma_model.keras')
@@ -89,6 +91,42 @@ def preprocess_tabular(age, gender, skin_tone, location, itching, bleeding, dura
         duration
     ])
 
+# Function to preprocess the image
+def preprocess_image(image):
+    img_array = np.array(image.resize((224, 224))) / 255.0  # Adjust size and normalize
+    img_array = np.expand_dims(img_array, axis=0)
+    return img_array
+
+# Function for Grad-CAM
+def generate_gradcam(model, img_array, class_index):
+    # Get the last convolutional layer
+    last_conv_layer = model.get_layer('conv5_block32_concat')  # Adjust this layer name based on your model
+
+    # Create a model that maps the input image to the activations of the last conv layer
+    grad_model = tf.keras.models.Model(
+        inputs=model.input,
+        outputs=[last_conv_layer.output, model.output]
+    )
+
+    # Compute the gradient of the class output with respect to the feature map
+    with tf.GradientTape() as tape:
+        conv_outputs, preds = grad_model(img_array)
+        loss = preds[:, class_index]
+
+    grads = tape.gradient(loss, conv_outputs)[0]
+
+    # Pool the gradients across the channels
+    pooled_grads = tf.reduce_mean(grads, axis=(0, 1))
+
+    # Weight the output feature map by the pooled gradients
+    heatmap = tf.reduce_mean(tf.multiply(pooled_grads, conv_outputs[0]), axis=-1)
+
+    # Normalize the heatmap
+    heatmap = np.maximum(heatmap, 0)  # ReLU
+    heatmap /= np.max(heatmap)  # Normalize
+    
+    return heatmap
+
 # Camera input
 image_file = st.camera_input("Take a picture of the skin condition")
 
@@ -98,14 +136,25 @@ if image_file is not None:
     st.image(image, caption='Uploaded Image', use_column_width=True)
 
     # Preprocess the image
-    img_array = np.array(image.resize((224, 224))) / 255.0  # Adjust size and normalize
-    img_array = np.expand_dims(img_array, axis=0)
+    img_array = preprocess_image(image)
 
     # Make predictions
     if st.button("Classify"):
         predictions = model.predict(img_array)
         class_index = np.argmax(predictions[0])
         predicted_class = classes[class_index]
+
+        # Generate Grad-CAM
+        heatmap = generate_gradcam(model, img_array, class_index)
+
+        # Create the Grad-CAM image
+        heatmap = cv2.resize(heatmap.numpy(), (image.size[0], image.size[1]))
+        heatmap = np.uint8(255 * heatmap)  # Scale to [0, 255]
+        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)  # Apply colormap
+        heatmap = cv2.addWeighted(np.array(image), 0.5, heatmap, 0.5, 0)  # Overlay
+
+        # Display Grad-CAM result
+        st.image(heatmap, caption='Grad-CAM', use_column_width=True)
 
         # Combine tabular input for prediction
         tabular_input = preprocess_tabular(age, gender, skin_tone, location, itching, bleeding, duration)
@@ -117,7 +166,6 @@ if image_file is not None:
             st.subheader("Benign")
         
         st.success(f"Predicted Class: {predicted_class}")
-
 
 # Function to collect feedback
 def collect_feedback():
