@@ -117,3 +117,30 @@ if image_file is not None:
             st.subheader("Benign")
         
         st.success(f"Predicted Class: {predicted_class}")
+
+
+# Function to collect feedback
+def collect_feedback():
+    st.title(":rainbow[Feedback] Form📖")
+    
+    # Add a text area for the feedback
+    feedback = st.text_area("Please share your feedback to improve this app💕", "", height=150)
+    
+    # Add a submit button
+    if st.button("Submit Feedback"):
+        if feedback:
+            st.success("Thank you for your feedback🫶!")
+            # Save feedback to a file, database, or send it via email, etc.
+            save_feedback(feedback)
+        else:
+            st.error("Please enter some feedback before submitting😡.")
+
+# Function to save feedback (can be customized to store feedback anywhere)
+def save_feedback(feedback):
+    # Example: Save to a text file (or database)
+    with open("user_feedback.txt", "a") as f:
+        f.write(f"Feedback: {feedback}\n{'-'*50}\n")
+    st.info("Your feedback has been recorded.")
+
+# Show the feedback form
+collect_feedback()
