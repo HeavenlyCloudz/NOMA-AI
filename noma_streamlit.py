@@ -133,7 +133,7 @@ image_file = st.camera_input("Take a picture of the skin condition")
 if image_file is not None:
     # Display the uploaded image
     image = Image.open(image_file)
-    st.image(image, caption='Uploaded Image', use_column_width=True)
+    st.image(image, caption='Uploaded Image', use_container_width=True)
 
     # Preprocess the image
     img_array = preprocess_image(image)
