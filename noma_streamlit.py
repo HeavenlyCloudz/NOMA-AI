@@ -6,7 +6,7 @@ import tensorflow
 from tensorflow.keras.models import load_model
 
 # Load your trained model
-model = load_model(r'C:\Users\havil\Downloads\NOMA\NOMA-AI\noma_model.keras')
+model = load_model('noma_model.keras')
 
 # Define your classes
 classes = [
