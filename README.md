@@ -1,4 +1,4 @@
-# NOMA-AI
+# NOMA-AI🦠
 Noma AI Skin Cancer Detection Device
 
 ## Overview
