@@ -150,7 +150,7 @@ if image_file is not None:
         heatmap = generate_gradcam(model, img_array, class_index)
 
         # Create the Grad-CAM image
-        heatmap = cv2.resize(heatmap.numpy(), (image.size[0], image.size[1]))
+        heatmap = cv2.resize(heatmap, (image.size[0], image.size[1]))  # Corrected
         heatmap = np.uint8(255 * heatmap)  # Scale to [0, 255]
         heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)  # Apply colormap
         heatmap = cv2.addWeighted(np.array(image), 0.5, heatmap, 0.5, 0)  # Overlay
