@@ -59,7 +59,7 @@ st.markdown(
 )
 
 st.markdown('<div class="section">', unsafe_allow_html=True)
-st.header("Thank you for using this Skin Cancer AI Detection CNN")
+st.header("Thank you for using NOMA AI")
 st.write("CNNs are highly effective for detecting melanoma due to their capability to process image data. They excel in tasks like classification and object recognition, often surpassing human dermatologists in accuracy.")
 st.markdown('</div>', unsafe_allow_html=True)
 
