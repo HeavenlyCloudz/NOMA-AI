@@ -3,4 +3,4 @@ tensorflow
 Pillow
 numpy
 scikit-learn
-cv2
+opencv-python
