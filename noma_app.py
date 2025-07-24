@@ -1,26 +1,20 @@
-import RPi.GPIO as GPIO
 import sys
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.models import load_model
 from PyQt5 import QtWidgets, QtGui
-from PyQt5.QtWidgets import QLabel, QVBoxLayout, QPushButton, QApplication, QFileDialog, QSlider, QComboBox, QCheckBox, QTextEdit, QMessageBox
+from PyQt5.QtWidgets import QLabel, QVBoxLayout, QPushButton, QApplication, QFileDialog, QTextEdit, QMessageBox
 from PIL import Image
+from gpiozero import LED
 
 class NomaAIApp(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
 
-        # Set up GPIO
-        GPIO.setmode(GPIO.BCM)
-        self.red_light_pin = 17    # GPIO pin for red light
-        self.yellow_light_pin = 27  # GPIO pin for yellow light
-        self.green_light_pin = 22    # GPIO pin for green light
-        
-        # Set GPIO pins as outputs
-        GPIO.setup(self.red_light_pin, GPIO.OUT)
-        GPIO.setup(self.yellow_light_pin, GPIO.OUT)
-        GPIO.setup(self.green_light_pin, GPIO.OUT)
+        # Set up GPIO using GPIOZero
+        self.red_light = LED(17)    # GPIO pin for red light
+        self.yellow_light = LED(27)  # GPIO pin for yellow light
+        self.green_light = LED(22)    # GPIO pin for green light
 
         self.model = load_model('noma_model.keras')
         self.classes = [
@@ -96,19 +90,19 @@ class NomaAIApp(QtWidgets.QWidget):
         # Control lights based on classification
         if predicted_class in self.malignant_classes:
             result = "Malignant"
-            GPIO.output(self.red_light_pin, GPIO.HIGH)
-            GPIO.output(self.yellow_light_pin, GPIO.LOW)
-            GPIO.output(self.green_light_pin, GPIO.LOW)
+            self.red_light.on()
+            self.yellow_light.off()
+            self.green_light.off()
         elif predicted_class in self.benign_classes:
             result = "Benign"
-            GPIO.output(self.red_light_pin, GPIO.LOW)
-            GPIO.output(self.yellow_light_pin, GPIO.HIGH)
-            GPIO.output(self.green_light_pin, GPIO.LOW)
+            self.red_light.off()
+            self.yellow_light.on()
+            self.green_light.off()
         elif predicted_class in self.normal_classes:
             result = "Normal"
-            GPIO.output(self.red_light_pin, GPIO.LOW)
-            GPIO.output(self.yellow_light_pin, GPIO.LOW)
-            GPIO.output(self.green_light_pin, GPIO.HIGH)
+            self.red_light.off()
+            self.yellow_light.off()
+            self.green_light.on()
 
         QMessageBox.information(self, "Prediction Result", f"Predicted Class: {predicted_class}\nClassification: {result}")
 
@@ -127,7 +121,9 @@ class NomaAIApp(QtWidgets.QWidget):
             QMessageBox.warning(self, "Warning", "Please enter feedback before submitting.")
 
     def closeEvent(self, event):
-        GPIO.cleanup()  # Reset GPIO pins
+        self.red_light.off()  # Reset lights
+        self.yellow_light.off()
+        self.green_light.off()
         event.accept()  # Accept event to close the app
 
 if __name__ == '__main__':
