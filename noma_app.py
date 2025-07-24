@@ -5,8 +5,22 @@ from tensorflow.keras.models import load_model
 from PyQt5 import QtWidgets, QtGui
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QPushButton, QApplication, QFileDialog, QTextEdit, QMessageBox
 from PIL import Image
-from gpiozero import LED
 from PyQt5.QtCore import QThread, pyqtSignal
+import platform
+
+# Conditional GPIO import
+if platform.system() == "Linux" and "arm" in platform.uname().machine:
+    from gpiozero import LED
+else:
+    class LED:
+        def __init__(self, pin):
+            pass  # No-op for non-Raspberry Pi
+
+        def on(self):
+            pass  # No-op
+
+        def off(self):
+            pass  # No-op
 
 class ModelLoader(QThread):
     model_loaded = pyqtSignal()
@@ -19,10 +33,29 @@ class NomaAIApp(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
 
-        # Set up GPIO using GPIOZero
+        # Set up GPIO using GPIOZero conditionally
         self.red_light = LED(17)    # GPIO pin for red light
         self.yellow_light = LED(27)  # GPIO pin for yellow light
         self.green_light = LED(22)   # GPIO pin for green light
+
+        self.classes = [
+            "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous",
+            "Candidiasis", "Drug Eruption", "Eczema", "Infestations/Bites",
+            "Lichen", "Lupus", "Moles", "Psoriasis", "Rosacea",
+            "Seborrheic Keratoses", "Skin Cancer",
+            "Sun/Sunlight Damage", "Tinea", "Unknown/Normal",
+            "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
+        ]
+
+        self.malignant_classes = ["Skin Cancer"]
+        self.benign_classes = [
+            "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous", "Candidiasis",
+            "Drug Eruption", "Eczema", "Infestations/Bites", "Lichen", "Lupus",
+            "Moles", "Psoriasis", "Rosacea", "Seborrheic Keratoses",
+            "Sun/Sunlight Damage", "Tinea", 
+            "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
+        ]
+        self.normal_classes = ["Unknown/Normal"]
 
         self.initUI()
         self.load_model()
