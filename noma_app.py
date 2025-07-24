@@ -6,6 +6,14 @@ from PyQt5 import QtWidgets, QtGui
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QPushButton, QApplication, QFileDialog, QTextEdit, QMessageBox
 from PIL import Image
 from gpiozero import LED
+from PyQt5.QtCore import QThread, pyqtSignal
+
+class ModelLoader(QThread):
+    model_loaded = pyqtSignal()
+
+    def run(self):
+        self.model = load_model('noma_model.keras')
+        self.model_loaded.emit()
 
 class NomaAIApp(QtWidgets.QWidget):
     def __init__(self):
@@ -14,29 +22,10 @@ class NomaAIApp(QtWidgets.QWidget):
         # Set up GPIO using GPIOZero
         self.red_light = LED(17)    # GPIO pin for red light
         self.yellow_light = LED(27)  # GPIO pin for yellow light
-        self.green_light = LED(22)    # GPIO pin for green light
-
-        self.model = load_model('noma_model.keras')
-        self.classes = [
-            "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous",
-            "Candidiasis", "Drug Eruption", "Eczema", "Infestations/Bites",
-            "Lichen", "Lupus", "Moles", "Psoriasis", "Rosacea",
-            "Seborrheic Keratoses", "Skin Cancer",
-            "Sun/Sunlight Damage", "Tinea", "Unknown/Normal",
-            "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
-        ]
-
-        self.malignant_classes = ["Skin Cancer"]
-        self.benign_classes = [
-            "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous", "Candidiasis",
-            "Drug Eruption", "Eczema", "Infestations/Bites", "Lichen", "Lupus",
-            "Moles", "Psoriasis", "Rosacea", "Seborrheic Keratoses",
-            "Sun/Sunlight Damage", "Tinea", 
-            "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
-        ]
-        self.normal_classes = ["Unknown/Normal"]
+        self.green_light = LED(22)   # GPIO pin for green light
 
         self.initUI()
+        self.load_model()
 
     def initUI(self):
         self.setWindowTitle("NOMA AI Skin Cancer Detection")
@@ -68,6 +57,18 @@ class NomaAIApp(QtWidgets.QWidget):
 
         self.setLayout(layout)
 
+    def load_model(self):
+        self.loading_label = QLabel("Loading model, please wait...")
+        self.layout().addWidget(self.loading_label)
+
+        self.model_loader = ModelLoader()
+        self.model_loader.model_loaded.connect(self.on_model_loaded)
+        self.model_loader.start()
+
+    def on_model_loaded(self):
+        self.loading_label.setText("Model loaded successfully!")
+        self.loading_label.setStyleSheet("color: green;")
+
     def upload_image(self):
         options = QFileDialog.Options()
         file_name, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg)", options=options)
@@ -83,7 +84,12 @@ class NomaAIApp(QtWidgets.QWidget):
         image = Image.open(self.image_path)
         img_array = self.preprocess_image(image)
 
-        predictions = self.model.predict(img_array)
+        # Ensure the model is loaded before predicting
+        if not hasattr(self, 'model_loader') or not hasattr(self.model_loader, 'model'):
+            QMessageBox.warning(self, "Warning", "Model is not loaded yet.")
+            return
+
+        predictions = self.model_loader.model.predict(img_array)
         class_index = np.argmax(predictions[0])
         predicted_class = self.classes[class_index]
 
