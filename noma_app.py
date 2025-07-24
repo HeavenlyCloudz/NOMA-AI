@@ -14,13 +14,13 @@ if platform.system() == "Linux" and "arm" in platform.uname().machine:
 else:
     class LED:
         def __init__(self, pin):
-            pass  # No-op for non-Raspberry Pi
+            self.pin = pin  # Store pin number for reference
 
         def on(self):
-            pass  # No-op
+            print(f"LED on pin {self.pin} is turned ON (mock).")  # Mock behavior
 
         def off(self):
-            pass  # No-op
+            print(f"LED on pin {self.pin} is turned OFF (mock).")  # Mock behavior
 
 class ModelLoader(QThread):
     model_loaded = pyqtSignal()
