@@ -1,5 +1,9 @@
+PyQt5
 streamlit
 tensorflow
 Pillow
 numpy
 scikit-learn
+opencv-python-headless
+matplotlib
+RPi.GPIO

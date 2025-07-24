@@ -1,0 +1,137 @@
+import RPi.GPIO as GPIO
+import sys
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+from PyQt5 import QtWidgets, QtGui
+from PyQt5.QtWidgets import QLabel, QVBoxLayout, QPushButton, QApplication, QFileDialog, QSlider, QComboBox, QCheckBox, QTextEdit, QMessageBox
+from PIL import Image
+
+class NomaAIApp(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+
+        # Set up GPIO
+        GPIO.setmode(GPIO.BCM)
+        self.red_light_pin = 17    # GPIO pin for red light
+        self.yellow_light_pin = 27  # GPIO pin for yellow light
+        self.green_light_pin = 22    # GPIO pin for green light
+        
+        # Set GPIO pins as outputs
+        GPIO.setup(self.red_light_pin, GPIO.OUT)
+        GPIO.setup(self.yellow_light_pin, GPIO.OUT)
+        GPIO.setup(self.green_light_pin, GPIO.OUT)
+
+        self.model = load_model('noma_model.keras')
+        self.classes = [
+            "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous",
+            "Candidiasis", "Drug Eruption", "Eczema", "Infestations/Bites",
+            "Lichen", "Lupus", "Moles", "Psoriasis", "Rosacea",
+            "Seborrheic Keratoses", "Skin Cancer",
+            "Sun/Sunlight Damage", "Tinea", "Unknown/Normal",
+            "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
+        ]
+
+        self.malignant_classes = ["Skin Cancer"]
+        self.benign_classes = [
+            "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous", "Candidiasis",
+            "Drug Eruption", "Eczema", "Infestations/Bites", "Lichen", "Lupus",
+            "Moles", "Psoriasis", "Rosacea", "Seborrheic Keratoses",
+            "Sun/Sunlight Damage", "Tinea", 
+            "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
+        ]
+        self.normal_classes = ["Unknown/Normal"]
+
+        self.initUI()
+
+    def initUI(self):
+        self.setWindowTitle("NOMA AI Skin Cancer Detection")
+        self.setGeometry(100, 100, 800, 600)
+
+        layout = QVBoxLayout()
+
+        self.image_label = QLabel("No image uploaded")
+        self.image_label.setAlignment(QtGui.Qt.AlignCenter)
+        layout.addWidget(self.image_label)
+
+        self.upload_button = QPushButton("Upload Image")
+        self.upload_button.setStyleSheet("font-size: 24px; padding: 20px;")
+        self.upload_button.clicked.connect(self.upload_image)
+        layout.addWidget(self.upload_button)
+
+        self.classify_button = QPushButton("Classify")
+        self.classify_button.setStyleSheet("font-size: 24px; padding: 20px;")
+        self.classify_button.clicked.connect(self.classify_image)
+        layout.addWidget(self.classify_button)
+
+        self.feedback_area = QTextEdit("Provide feedback...")
+        layout.addWidget(self.feedback_area)
+
+        self.submit_feedback_button = QPushButton("Submit Feedback")
+        self.submit_feedback_button.setStyleSheet("font-size: 24px; padding: 20px;")
+        self.submit_feedback_button.clicked.connect(self.submit_feedback)
+        layout.addWidget(self.submit_feedback_button)
+
+        self.setLayout(layout)
+
+    def upload_image(self):
+        options = QFileDialog.Options()
+        file_name, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg)", options=options)
+        if file_name:
+            self.image_label.setPixmap(QtGui.QPixmap(file_name).scaled(400, 300))
+            self.image_path = file_name
+
+    def classify_image(self):
+        if not hasattr(self, 'image_path'):
+            QMessageBox.warning(self, "Warning", "Please upload an image first.")
+            return
+
+        image = Image.open(self.image_path)
+        img_array = self.preprocess_image(image)
+
+        predictions = self.model.predict(img_array)
+        class_index = np.argmax(predictions[0])
+        predicted_class = self.classes[class_index]
+
+        # Control lights based on classification
+        if predicted_class in self.malignant_classes:
+            result = "Malignant"
+            GPIO.output(self.red_light_pin, GPIO.HIGH)
+            GPIO.output(self.yellow_light_pin, GPIO.LOW)
+            GPIO.output(self.green_light_pin, GPIO.LOW)
+        elif predicted_class in self.benign_classes:
+            result = "Benign"
+            GPIO.output(self.red_light_pin, GPIO.LOW)
+            GPIO.output(self.yellow_light_pin, GPIO.HIGH)
+            GPIO.output(self.green_light_pin, GPIO.LOW)
+        elif predicted_class in self.normal_classes:
+            result = "Normal"
+            GPIO.output(self.red_light_pin, GPIO.LOW)
+            GPIO.output(self.yellow_light_pin, GPIO.LOW)
+            GPIO.output(self.green_light_pin, GPIO.HIGH)
+
+        QMessageBox.information(self, "Prediction Result", f"Predicted Class: {predicted_class}\nClassification: {result}")
+
+    def preprocess_image(self, image):
+        img_array = np.array(image.resize((224, 224))) / 255.0
+        img_array = np.expand_dims(img_array, axis=0)
+        return img_array
+
+    def submit_feedback(self):
+        feedback = self.feedback_area.toPlainText()
+        if feedback:
+            with open("user_feedback.txt", "a") as f:
+                f.write(f"Feedback: {feedback}\n{'-'*50}\n")
+            QMessageBox.information(self, "Feedback", "Thank you for your feedback!")
+        else:
+            QMessageBox.warning(self, "Warning", "Please enter feedback before submitting.")
+
+    def closeEvent(self, event):
+        GPIO.cleanup()  # Reset GPIO pins
+        event.accept()  # Accept event to close the app
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    ex = NomaAIApp()
+    ex.show()
+    sys.exit(app.exec_())
