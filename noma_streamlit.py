@@ -153,7 +153,7 @@ if image_file is not None:
         heatmap = cv2.addWeighted(np.array(image), 0.5, heatmap, 0.5, 0)  # Overlay
 
         # Display Grad-CAM result
-        st.image(heatmap, caption='Grad-CAM', use_column_width=True)
+        st.image(heatmap, caption='Grad-CAM', use_container_width=True)
 
         # Combine tabular input for prediction
         tabular_input = preprocess_tabular(age, gender, skin_tone, location, itching, bleeding, duration)
