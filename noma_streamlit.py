@@ -90,6 +90,20 @@ def preprocess_tabular(age, gender, skin_tone, location, itching, bleeding, dura
         duration
     ])
 
+# Function to assess likelihood based on tabular data
+def assess_likelihood(tabular_input, predictions):
+    likelihoods = {}
+    for cls, prediction in zip(classes, predictions[0]):
+        base_likelihood = prediction
+        if tabular_input[0] > 50:  # Older age increases risk for some conditions
+            base_likelihood *= 1.1
+        if tabular_input[4]:  # Itching increases risk for certain conditions
+            if cls in ["Eczema", "Psoriasis"]:
+                base_likelihood *= 1.2
+        likelihoods[cls] = min(base_likelihood, 1.0)  # Cap at 1.0
+    return likelihoods
+
+
 # Function to preprocess the image
 def preprocess_image(image):
     img_array = np.array(image.resize((224, 224))) / 255.0  # Adjust size and normalize
@@ -174,18 +188,6 @@ if image_file is not None:
         for cls, likelihood in likelihoods.items():
             st.write(f"{cls}: {likelihood * 100:.2f}%")
 
-# Function to assess likelihood based on tabular data
-def assess_likelihood(tabular_input, predictions):
-    likelihoods = {}
-    for cls, prediction in zip(classes, predictions[0]):
-        base_likelihood = prediction
-        if tabular_input[0] > 50:  # Older age increases risk for some conditions
-            base_likelihood *= 1.1
-        if tabular_input[4]:  # Itching increases risk for certain conditions
-            if cls in ["Eczema", "Psoriasis"]:
-                base_likelihood *= 1.2
-        likelihoods[cls] = min(base_likelihood, 1.0)  # Cap at 1.0
-    return likelihoods
 
 # Function to collect feedback
 def collect_feedback():
