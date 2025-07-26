@@ -158,6 +158,9 @@ if image_file is not None:
         # Combine tabular input for prediction
         tabular_input = preprocess_tabular(age, gender, skin_tone, location, itching, bleeding, duration)
 
+        # Assess likelihoods
+        likelihoods = assess_likelihood(tabular_input, predictions)
+
         # Display results
         if predicted_class in malignant_classes:
             st.subheader("Malignant")
@@ -165,6 +168,24 @@ if image_file is not None:
             st.subheader("Benign")
 
         st.success(f"Predicted Class: {predicted_class}")
+
+        # Display likelihood results
+        st.subheader("Likelihood of Conditions:")
+        for cls, likelihood in likelihoods.items():
+            st.write(f"{cls}: {likelihood * 100:.2f}%")
+
+# Function to assess likelihood based on tabular data
+def assess_likelihood(tabular_input, predictions):
+    likelihoods = {}
+    for cls, prediction in zip(classes, predictions[0]):
+        base_likelihood = prediction
+        if tabular_input[0] > 50:  # Older age increases risk for some conditions
+            base_likelihood *= 1.1
+        if tabular_input[4]:  # Itching increases risk for certain conditions
+            if cls in ["Eczema", "Psoriasis"]:
+                base_likelihood *= 1.2
+        likelihoods[cls] = min(base_likelihood, 1.0)  # Cap at 1.0
+    return likelihoods
 
 # Function to collect feedback
 def collect_feedback():
@@ -177,14 +198,12 @@ def collect_feedback():
     if st.button("Submit Feedback"):
         if feedback:
             st.success("Thank you for your feedback🫶!")
-            # Save feedback to a file, database, or send it via email, etc.
             save_feedback(feedback)
         else:
             st.error("Please enter some feedback before submitting😡.")
 
 # Function to save feedback (can be customized to store feedback anywhere)
 def save_feedback(feedback):
-    # Example: Save to a text file (or database)
     with open("user_feedback.txt", "a") as f:
         f.write(f"Feedback: {feedback}\n{'-'*50}\n")
     st.info("Your feedback has been recorded.")
