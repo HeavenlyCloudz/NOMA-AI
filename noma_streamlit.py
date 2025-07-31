@@ -8,27 +8,27 @@ import cv2
 import matplotlib.pyplot as plt
 
 # Load your trained model
-model = load_model('noma_model.keras')
+model = load_model('new_noma_model.keras')
 
 # Define your classes
 classes = [
     "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous",
     "Candidiasis", "Drug Eruption", "Eczema", "Infestations/Bites",
     "Lichen", "Lupus", "Moles", "Psoriasis", "Rosacea",
-    "Seborrheic Keratoses", "Skin Cancer",  # Malignant
-    "Sun/Sunlight Damage", "Tinea", "Unknown/Normal",  # Normal
-    "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
+    "Seborrheic Keratoses", "Melanoma",  # Malignant
+    "Basal Cell Carcinoma", "Squamous Cell Carcinoma", "Sun/Sunlight Damage",
+    "Tinea", "Normal", "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
 ]
 
-# Define malignant and benign classes
-malignant_classes = ["Skin Cancer"]
+# Define malignant, benign, and normal classes
+malignant_classes = ["Melanoma", "Basal Cell Carcinoma", "Squamous Cell Carcinoma"]
 benign_classes = [
     "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous", "Candidiasis",
     "Drug Eruption", "Eczema", "Infestations/Bites", "Lichen", "Lupus",
     "Moles", "Psoriasis", "Rosacea", "Seborrheic Keratoses",
-    "Sun/Sunlight Damage", "Tinea", "Unknown/Normal",
-    "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
+    "Sun/Sunlight Damage", "Tinea", "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
 ]
+normal_classes = ["Normal"]
 
 # Streamlit UI
 st.title("NOMA AI🦠")
@@ -102,7 +102,6 @@ def assess_likelihood(tabular_input, predictions):
                 base_likelihood *= 1.2
         likelihoods[cls] = min(base_likelihood, 1.0)  # Cap at 1.0
     return likelihoods
-
 
 # Function to preprocess the image
 def preprocess_image(image):
@@ -178,8 +177,10 @@ if image_file is not None:
         # Display results
         if predicted_class in malignant_classes:
             st.subheader("Malignant")
-        else:
+        elif predicted_class in benign_classes:
             st.subheader("Benign")
+        elif predicted_class in normal_classes:
+            st.subheader("Normal")
 
         st.success(f"Predicted Class: {predicted_class}")
 
@@ -187,7 +188,6 @@ if image_file is not None:
         st.subheader("Likelihood of Conditions:")
         for cls, likelihood in likelihoods.items():
             st.write(f"{cls}: {likelihood * 100:.2f}%")
-
 
 # Function to collect feedback
 def collect_feedback():
