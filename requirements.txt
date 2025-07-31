@@ -1,9 +1,7 @@
-PyQt5
 tensorflow
 Pillow
 numpy
 scikit-learn
 opencv-python-headless
 matplotlib
-gpiozero
 streamlit
