@@ -112,7 +112,7 @@ def preprocess_image(image):
 # Function for Grad-CAM
 def generate_gradcam(model, img_array, class_index):
     # Get the last convolutional layer
-    last_conv_layer = model.get_layer('conv5_block16_concat')  # Adjust this layer name based on your model
+    last_conv_layer = model.get_layer('densenet121')  # Adjust this layer name based on your model
 
     # Create a model that maps the input image to the activations of the last conv layer
     grad_model = tf.keras.models.Model(
