@@ -8,7 +8,7 @@ import cv2
 import matplotlib.pyplot as plt
 
 # Load your trained model
-model = load_model('new_noma_model.keras')
+model = load_model('right_noma_model.keras')
 
 # Define your classes
 classes = [
@@ -116,7 +116,7 @@ def generate_gradcam(model, img_array, class_index):
         raise ValueError("Image array must have shape (1, 224, 224, 3)")
 
     # Use the DenseNet output directly
-    last_conv_layer = model.get_layer('densenet121')  # Adjust if needed
+    last_conv_layer = model.get_layer('Conv_1')  # Adjust if needed
 
     # Create a model that maps the input image to the activations of the DenseNet output
     grad_model = tf.keras.models.Model(
