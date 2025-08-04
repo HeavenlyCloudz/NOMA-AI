@@ -26,7 +26,7 @@ class ModelLoader(QThread):
     model_loaded = pyqtSignal()
 
     def run(self):
-        self.model = load_model('noma_model.keras')
+        self.model = load_model('new_noma_model.keras')  # Updated model name
         self.model_loaded.emit()
 
 class NomaAIApp(QtWidgets.QWidget):
@@ -42,12 +42,12 @@ class NomaAIApp(QtWidgets.QWidget):
             "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous",
             "Candidiasis", "Drug Eruption", "Eczema", "Infestations/Bites",
             "Lichen", "Lupus", "Moles", "Psoriasis", "Rosacea",
-            "Seborrheic Keratoses", "Skin Cancer",
-            "Sun/Sunlight Damage", "Tinea", "Unknown/Normal",
-            "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
+            "Seborrheic Keratoses", "Melanoma",  # Malignant
+            "Basal Cell Carcinoma", "Squamous Cell Carcinoma", "Sun/Sunlight Damage",
+            "Tinea", "Normal", "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
         ]
 
-        self.malignant_classes = ["Skin Cancer"]
+        self.malignant_classes = ["Melanoma", "Basal Cell Carcinoma", "Squamous Cell Carcinoma"]
         self.benign_classes = [
             "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous", "Candidiasis",
             "Drug Eruption", "Eczema", "Infestations/Bites", "Lichen", "Lupus",
@@ -55,7 +55,7 @@ class NomaAIApp(QtWidgets.QWidget):
             "Sun/Sunlight Damage", "Tinea", 
             "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
         ]
-        self.normal_classes = ["Unknown/Normal"]
+        self.normal_classes = ["Normal"]
 
         self.initUI()
         self.load_model()
