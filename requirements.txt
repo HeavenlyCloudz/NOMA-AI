@@ -5,3 +5,4 @@ scikit-learn
 opencv-python-headless
 matplotlib
 streamlit
+PyQt5
