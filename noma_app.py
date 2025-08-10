@@ -26,7 +26,7 @@ class ModelLoader(QThread):
     model_loaded = pyqtSignal()
 
     def run(self):
-        self.model = load_model('new_noma_model.keras')  # Updated model name
+        self.model = load_model('right_noma_model.keras')  # Updated model name
         self.model_loaded.emit()
 
 class NomaAIApp(QtWidgets.QWidget):
