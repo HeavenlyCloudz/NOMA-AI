@@ -4,9 +4,11 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 from PyQt5 import QtWidgets, QtGui
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QPushButton, QApplication, QFileDialog, QTextEdit, QMessageBox
-from PIL import Image
 from PyQt5.QtCore import QThread, pyqtSignal
+from PIL import Image
 import platform
+from datetime import datetime
+import os
 
 # Conditional GPIO import
 if platform.system() == "Linux" and "arm" in platform.uname().machine:
@@ -14,30 +16,35 @@ if platform.system() == "Linux" and "arm" in platform.uname().machine:
 else:
     class LED:
         def __init__(self, pin):
-            self.pin = pin  # Store pin number for reference
+            self.pin = pin
 
         def on(self):
-            print(f"LED on pin {self.pin} is turned ON (mock).")  # Mock behavior
+            print(f"LED on pin {self.pin} is turned ON (mock).")
 
         def off(self):
-            print(f"LED on pin {self.pin} is turned OFF (mock).")  # Mock behavior
+            print(f"LED on pin {self.pin} is turned OFF (mock).")
 
 class ModelLoader(QThread):
     model_loaded = pyqtSignal()
+    load_failed = pyqtSignal(str)
 
     def run(self):
-        self.model = load_model('right_noma_model.keras')  # Updated model name
-        self.model_loaded.emit()
+        try:
+            self.model = load_model('right_noma_model.keras')
+            self.model_loaded.emit()
+        except Exception as e:
+            self.load_failed.emit(str(e))
 
 class NomaAIApp(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
 
-        # Set up GPIO using GPIOZero conditionally
-        self.red_light = LED(17)    # GPIO pin for red light
-        self.yellow_light = LED(27)  # GPIO pin for yellow light
-        self.green_light = LED(22)   # GPIO pin for green light
+        # GPIO setup
+        self.red_light = LED(17)
+        self.yellow_light = LED(27)
+        self.green_light = LED(22)
 
+        # Classification categories
         self.classes = [
             "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous",
             "Candidiasis", "Drug Eruption", "Eczema", "Infestations/Bites",
@@ -52,7 +59,7 @@ class NomaAIApp(QtWidgets.QWidget):
             "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous", "Candidiasis",
             "Drug Eruption", "Eczema", "Infestations/Bites", "Lichen", "Lupus",
             "Moles", "Psoriasis", "Rosacea", "Seborrheic Keratoses",
-            "Sun/Sunlight Damage", "Tinea", 
+            "Sun/Sunlight Damage", "Tinea",
             "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
         ]
         self.normal_classes = ["Normal"]
@@ -78,6 +85,7 @@ class NomaAIApp(QtWidgets.QWidget):
         self.classify_button = QPushButton("Classify")
         self.classify_button.setStyleSheet("font-size: 24px; padding: 20px;")
         self.classify_button.clicked.connect(self.classify_image)
+        self.classify_button.setEnabled(False)  # Disabled until model loads
         layout.addWidget(self.classify_button)
 
         self.feedback_area = QTextEdit("Provide feedback...")
@@ -88,6 +96,12 @@ class NomaAIApp(QtWidgets.QWidget):
         self.submit_feedback_button.clicked.connect(self.submit_feedback)
         layout.addWidget(self.submit_feedback_button)
 
+        # Shutdown button
+        self.shutdown_button = QPushButton("Shutdown Device")
+        self.shutdown_button.setStyleSheet("font-size: 24px; padding: 20px;")
+        self.shutdown_button.clicked.connect(self.shutdown_device)
+        layout.addWidget(self.shutdown_button)
+
         self.setLayout(layout)
 
     def load_model(self):
@@ -96,11 +110,18 @@ class NomaAIApp(QtWidgets.QWidget):
 
         self.model_loader = ModelLoader()
         self.model_loader.model_loaded.connect(self.on_model_loaded)
+        self.model_loader.load_failed.connect(self.on_model_load_failed)
         self.model_loader.start()
 
     def on_model_loaded(self):
         self.loading_label.setText("Model loaded successfully!")
         self.loading_label.setStyleSheet("color: green;")
+        self.classify_button.setEnabled(True)
+
+    def on_model_load_failed(self, error_message):
+        self.loading_label.setText(f"Failed to load model: {error_message}")
+        self.loading_label.setStyleSheet("color: red;")
+        QMessageBox.critical(self, "Error", f"Model loading failed:\n{error_message}")
 
     def upload_image(self):
         options = QFileDialog.Options()
@@ -114,19 +135,23 @@ class NomaAIApp(QtWidgets.QWidget):
             QMessageBox.warning(self, "Warning", "Please upload an image first.")
             return
 
-        image = Image.open(self.image_path)
-        img_array = self.preprocess_image(image)
-
-        # Ensure the model is loaded before predicting
-        if not hasattr(self, 'model_loader') or not hasattr(self.model_loader, 'model'):
-            QMessageBox.warning(self, "Warning", "Model is not loaded yet.")
+        try:
+            image = Image.open(self.image_path).convert("RGB")
+            img_array = self.preprocess_image(image)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to process image: {e}")
             return
 
-        predictions = self.model_loader.model.predict(img_array)
+        try:
+            predictions = self.model_loader.model.predict(img_array)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Prediction failed: {e}")
+            return
+
         class_index = np.argmax(predictions[0])
         predicted_class = self.classes[class_index]
 
-        # Control lights based on classification
+        # LED control
         if predicted_class in self.malignant_classes:
             result = "Malignant"
             self.red_light.on()
@@ -151,19 +176,27 @@ class NomaAIApp(QtWidgets.QWidget):
         return img_array
 
     def submit_feedback(self):
-        feedback = self.feedback_area.toPlainText()
+        feedback = self.feedback_area.toPlainText().strip()
         if feedback:
             with open("user_feedback.txt", "a") as f:
-                f.write(f"Feedback: {feedback}\n{'-'*50}\n")
+                f.write(f"{datetime.now()} - Feedback: {feedback}\n{'-'*50}\n")
             QMessageBox.information(self, "Feedback", "Thank you for your feedback!")
         else:
             QMessageBox.warning(self, "Warning", "Please enter feedback before submitting.")
+
+    def shutdown_device(self):
+        reply = QMessageBox.question(
+            self, 'Shutdown Confirmation', 'Are you sure you want to turn off the device?',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            os.system("sudo shutdown now")  # Safe shutdown for Raspberry Pi
 
     def closeEvent(self, event):
         self.red_light.off()  # Reset lights
         self.yellow_light.off()
         self.green_light.off()
-        event.accept()  # Accept event to close the app
+        event.accept()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
