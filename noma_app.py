@@ -9,6 +9,7 @@ from PIL import Image
 import platform
 from datetime import datetime
 import os
+import cv2
 
 # Conditional GPIO import
 if platform.system() == "Linux" and "arm" in platform.uname().machine:
@@ -17,13 +18,39 @@ else:
     class LED:
         def __init__(self, pin):
             self.pin = pin
-
         def on(self):
             print(f"LED on pin {self.pin} is turned ON (mock).")
-
         def off(self):
             print(f"LED on pin {self.pin} is turned OFF (mock).")
 
+# ---------------- Camera Thread ---------------- #
+class CameraThread(QThread):
+    frame_ready = pyqtSignal(QtGui.QImage)
+
+    def __init__(self, camera_index=0):
+        super().__init__()
+        self.camera_index = camera_index
+        self.running = True
+
+    def run(self):
+        cap = cv2.VideoCapture(self.camera_index)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        while self.running:
+            ret, frame = cap.read()
+            if ret:
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb_frame.shape
+                bytes_per_line = ch * w
+                qt_image = QtGui.QImage(rgb_frame.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+                self.frame_ready.emit(qt_image)
+        cap.release()
+
+    def stop(self):
+        self.running = False
+        self.wait()
+
+# ---------------- Model Loader ---------------- #
 class ModelLoader(QThread):
     model_loaded = pyqtSignal()
     load_failed = pyqtSignal(str)
@@ -35,6 +62,7 @@ class ModelLoader(QThread):
         except Exception as e:
             self.load_failed.emit(str(e))
 
+# ---------------- Main App ---------------- #
 class NomaAIApp(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
@@ -53,7 +81,6 @@ class NomaAIApp(QtWidgets.QWidget):
             "Basal Cell Carcinoma", "Squamous Cell Carcinoma", "Sun/Sunlight Damage",
             "Tinea", "Normal", "Vascular Tumors", "Vasculitis", "Vitiligo", "Warts"
         ]
-
         self.malignant_classes = ["Melanoma", "Basal Cell Carcinoma", "Squamous Cell Carcinoma"]
         self.benign_classes = [
             "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous", "Candidiasis",
@@ -66,17 +93,19 @@ class NomaAIApp(QtWidgets.QWidget):
 
         self.initUI()
         self.load_model()
+        self.start_camera()
 
     def initUI(self):
         self.setWindowTitle("NOMA AI Skin Cancer Detection")
         self.setGeometry(100, 100, 800, 600)
-
         layout = QVBoxLayout()
 
-        self.image_label = QLabel("No image uploaded")
+        # Image / camera display
+        self.image_label = QLabel("Loading camera feed...")
         self.image_label.setAlignment(QtGui.Qt.AlignCenter)
         layout.addWidget(self.image_label)
 
+        # Buttons
         self.upload_button = QPushButton("Upload Image")
         self.upload_button.setStyleSheet("font-size: 24px; padding: 20px;")
         self.upload_button.clicked.connect(self.upload_image)
@@ -85,7 +114,7 @@ class NomaAIApp(QtWidgets.QWidget):
         self.classify_button = QPushButton("Classify")
         self.classify_button.setStyleSheet("font-size: 24px; padding: 20px;")
         self.classify_button.clicked.connect(self.classify_image)
-        self.classify_button.setEnabled(False)  # Disabled until model loads
+        self.classify_button.setEnabled(False)
         layout.addWidget(self.classify_button)
 
         self.feedback_area = QTextEdit("Provide feedback...")
@@ -96,7 +125,6 @@ class NomaAIApp(QtWidgets.QWidget):
         self.submit_feedback_button.clicked.connect(self.submit_feedback)
         layout.addWidget(self.submit_feedback_button)
 
-        # Shutdown button
         self.shutdown_button = QPushButton("Shutdown Device")
         self.shutdown_button.setStyleSheet("font-size: 24px; padding: 20px;")
         self.shutdown_button.clicked.connect(self.shutdown_device)
@@ -104,10 +132,20 @@ class NomaAIApp(QtWidgets.QWidget):
 
         self.setLayout(layout)
 
+    # ---------------- Camera ---------------- #
+    def start_camera(self):
+        self.camera_thread = CameraThread(camera_index=0)
+        self.camera_thread.frame_ready.connect(self.update_camera_feed)
+        self.camera_thread.start()
+
+    def update_camera_feed(self, qt_image):
+        self.image_label.setPixmap(QtGui.QPixmap.fromImage(qt_image).scaled(400, 300))
+        self.current_frame = qt_image
+
+    # ---------------- Model ---------------- #
     def load_model(self):
         self.loading_label = QLabel("Loading model, please wait...")
         self.layout().addWidget(self.loading_label)
-
         self.model_loader = ModelLoader()
         self.model_loader.model_loaded.connect(self.on_model_loaded)
         self.model_loader.load_failed.connect(self.on_model_load_failed)
@@ -123,6 +161,7 @@ class NomaAIApp(QtWidgets.QWidget):
         self.loading_label.setStyleSheet("color: red;")
         QMessageBox.critical(self, "Error", f"Model loading failed:\n{error_message}")
 
+    # ---------------- Image Upload ---------------- #
     def upload_image(self):
         options = QFileDialog.Options()
         file_name, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg)", options=options)
@@ -130,24 +169,22 @@ class NomaAIApp(QtWidgets.QWidget):
             self.image_label.setPixmap(QtGui.QPixmap(file_name).scaled(400, 300))
             self.image_path = file_name
 
+    # ---------------- Classification ---------------- #
     def classify_image(self):
-        if not hasattr(self, 'image_path'):
-            QMessageBox.warning(self, "Warning", "Please upload an image first.")
-            return
-
-        try:
+        if hasattr(self, 'image_path'):
             image = Image.open(self.image_path).convert("RGB")
-            img_array = self.preprocess_image(image)
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to process image: {e}")
+        elif hasattr(self, 'current_frame'):
+            image = Image.frombytes(
+                "RGB",
+                (self.current_frame.width(), self.current_frame.height()),
+                self.current_frame.bits().asstring(self.current_frame.byteCount())
+            )
+        else:
+            QMessageBox.warning(self, "Warning", "No image available.")
             return
 
-        try:
-            predictions = self.model_loader.model.predict(img_array)
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Prediction failed: {e}")
-            return
-
+        img_array = self.preprocess_image(image)
+        predictions = self.model_loader.model.predict(img_array)
         class_index = np.argmax(predictions[0])
         predicted_class = self.classes[class_index]
 
@@ -175,6 +212,7 @@ class NomaAIApp(QtWidgets.QWidget):
         img_array = np.expand_dims(img_array, axis=0)
         return img_array
 
+    # ---------------- Feedback ---------------- #
     def submit_feedback(self):
         feedback = self.feedback_area.toPlainText().strip()
         if feedback:
@@ -184,20 +222,24 @@ class NomaAIApp(QtWidgets.QWidget):
         else:
             QMessageBox.warning(self, "Warning", "Please enter feedback before submitting.")
 
+    # ---------------- Shutdown ---------------- #
     def shutdown_device(self):
         reply = QMessageBox.question(
             self, 'Shutdown Confirmation', 'Are you sure you want to turn off the device?',
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            os.system("sudo shutdown now")  # Safe shutdown for Raspberry Pi
+            os.system("sudo shutdown now")
 
+    # ---------------- Close Event ---------------- #
     def closeEvent(self, event):
-        self.red_light.off()  # Reset lights
+        self.camera_thread.stop()
+        self.red_light.off()
         self.yellow_light.off()
         self.green_light.off()
         event.accept()
 
+# ---------------- Main ---------------- #
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     ex = NomaAIApp()
