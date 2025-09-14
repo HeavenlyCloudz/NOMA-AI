@@ -102,7 +102,7 @@ class NomaAIApp(QtWidgets.QWidget):
 
         # Image / camera display
         self.image_label = QLabel("Loading camera feed...")
-        self.image_label.setAlignment(QtGui.Qt.AlignCenter)
+        self.image_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.image_label)
 
         # Buttons
