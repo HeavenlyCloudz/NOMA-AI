@@ -66,17 +66,17 @@ NOMA AI does not rely on AI alone. Each scan combines:
 
 NOMA AI is designed as an early-warning and educational tool, not a diagnostic replacement. By integrating explainable AI with clinician-inspired reasoning, it strengthens the first line of defense against skin cancer while improving public health literacy.
 
-# Make startup script executable
+_Make startup script executable_
 chmod +x /home/havil/noma_ai/start_noma.sh
 
-# Install service
+_Install service_
 sudo cp noma_ai.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable noma_ai.service
 sudo systemctl start noma_ai.service
 
-# Check status
+_Check status_
 sudo systemctl status noma_ai.service
 
-# View logs
+_View logs_
 sudo journalctl -u noma_ai.service -f
