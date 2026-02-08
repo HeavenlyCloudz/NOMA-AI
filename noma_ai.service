@@ -1,0 +1,24 @@
+[Unit]
+Description=NOMA AI Skin Analysis System
+After=graphical.target
+Wants=graphical.target
+Requires=graphical.target
+
+[Service]
+Type=simple
+User=havil
+Group=havil
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/havil/.Xauthority"
+WorkingDirectory=/home/havil/noma_ai
+ExecStart=/home/havil/noma_ai/start_noma.sh
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=noma_ai
+TimeoutStopSec=30
+KillMode=process
+
+[Install]
+WantedBy=graphical.target
