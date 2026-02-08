@@ -1,4 +1,4 @@
-**# NOMA AI — The Visual-Clinic Integrator**
+# **NOMA AI — The Visual-Clinic Integrator**
 
 NOMA AI is a portable, AI-powered skin cancer screening system that fuses computer vision with clinical risk assessment to provide accessible, preliminary skin lesion evaluation. Built on a Raspberry Pi 4, it democratizes dermatological screening through an integrated hardware–software solution designed for point-of-care use.
 
