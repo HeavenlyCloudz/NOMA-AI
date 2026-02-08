@@ -28,6 +28,8 @@ NOMA AI is a portable, AI-powered skin cancer screening system that fuses comput
 
 - Class Imbalance: Handled using computed class weights
 
+Link to Skin Diseases + Cancer Comprehensive Dataset: https://www.kaggle.com/datasets/anieetorudofia/skin-diseases-cancer-comprehensive-dataset
+
 # Model Architecture
 
 - Base Model: MobileNetV3 (ImageNet pre-trained)
