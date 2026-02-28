@@ -41,16 +41,11 @@ if [ -d /sys/class/gpio ]; then
     done
 fi
 
-# Wait for X11/display to be ready
+# Wait for display hardware to be ready
 echo "Waiting for display..."
 sleep 5
 
-# Set display environment - CRITICAL FOR QT
-export DISPLAY=:0
-export XAUTHORITY=/home/havil/.Xauthority
-export XDG_RUNTIME_DIR=/run/user/$(id -u)
-
-# Configure Qt for kiosk/fullscreen mode - EGLFS for Raspberry Pi
+# Set eglfs environment (the app also sets these, but keep for consistency)
 export QT_QPA_PLATFORM=eglfs
 export QT_QPA_EGLFS_HIDECURSOR=1
 export QT_QPA_EGLFS_WIDTH=800
@@ -62,10 +57,7 @@ export QT_AUTO_SCREEN_SCALE_FACTOR=0
 export QT_SCALE_FACTOR=1
 export QT_LOGGING_RULES="*.debug=false;qt.qpa.*=false"
 
-# Disable screen blanking and power management
-xset s off 2>/dev/null || true
-xset -dpms 2>/dev/null || true
-xset s noblank 2>/dev/null || true
+# No X11 settings – removed xset commands
 
 # Run the app
 echo "Starting NOMA AI application..."
