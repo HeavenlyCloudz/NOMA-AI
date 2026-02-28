@@ -1,15 +1,12 @@
 [Unit]
 Description=NOMA AI Skin Analysis System
-After=graphical.target
-Wants=graphical.target
-Requires=graphical.target
+After=multi-user.target
+# Removed graphical.target dependencies – we boot to console
 
 [Service]
 Type=simple
 User=havil
 Group=havil
-Environment="DISPLAY=:0"
-Environment="XAUTHORITY=/home/havil/.Xauthority"
 WorkingDirectory=/home/havil/noma_ai
 ExecStart=/home/havil/noma_ai/start_noma.sh
 Restart=on-failure
@@ -20,5 +17,7 @@ SyslogIdentifier=noma_ai
 TimeoutStopSec=30
 KillMode=process
 
+# Environment is now set inside start_noma.sh – no DISPLAY/XAUTHORITY needed
+
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target
