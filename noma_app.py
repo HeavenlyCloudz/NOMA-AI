@@ -712,6 +712,10 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
     
     def calculate_results(self):
         """Calculate final risk score"""
+        # Stop blinking before showing results
+        if self.parent_app:
+            self.parent_app.stop_yellow_blinking()
+        
         # Calculate ABCDE score
         abcde_score = 0
         
@@ -809,8 +813,14 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         )
         if reply == QMessageBox.Yes:
             if self.parent_app:
-                self.parent_app.turn_off_leds()
+                self.parent_app.stop_yellow_blinking()
             self.reject()
+    
+    def reject(self):
+        """Handle window close (X button)"""
+        if self.parent_app:
+            self.parent_app.stop_yellow_blinking()
+        super().reject()
 
 # ---------------- Camera Thread ---------------- #
 class CameraThread(QThread):
@@ -894,6 +904,10 @@ class NomaAIApp(QMainWindow):
         
         # Turn all LEDs off initially
         turn_off_leds()
+        
+        # Blinking control
+        self.blink_timer = None
+        self.blink_state = False
         
         # Classes
         self.classes = [
@@ -1116,29 +1130,30 @@ class NomaAIApp(QMainWindow):
     
     # LED Methods
     def start_yellow_blinking_for_dialog(self):
-        """Start yellow LED blinking"""
+        """Start yellow LED blinking using a timer"""
         self.stop_yellow_blinking()
-        self.yellow_blink_count = 0
-        
-        def blink():
-            if self.yellow_blink_count < 20:
-                if self.yellow_blink_count % 2 == 0:
-                    set_leds(yellow=True)
-                else:
-                    set_leds(yellow=False)
-                self.yellow_blink_count += 1
-                QTimer.singleShot(500, blink)
-            else:
-                set_leds(yellow=False)
-        
-        blink()
+        self.blink_state = False
+        self.blink_timer = QTimer()
+        self.blink_timer.timeout.connect(self._blink_yellow)
+        self.blink_timer.start(500)  # 500 ms interval
+    
+    def _blink_yellow(self):
+        """Toggle yellow LED"""
+        self.blink_state = not self.blink_state
+        set_leds(yellow=self.blink_state)
     
     def stop_yellow_blinking(self):
-        """Stop yellow LED blinking"""
+        """Stop blinking and turn off yellow LED"""
+        if self.blink_timer:
+            self.blink_timer.stop()
+            self.blink_timer = None
         set_leds(yellow=False)
     
     def show_green_completion_pattern(self):
         """Show green completion pattern"""
+        # Ensure blinking is stopped
+        self.stop_yellow_blinking()
+        # Pattern: two short blinks
         set_leds(green=True)
         QTimer.singleShot(300, lambda: set_leds(green=False))
         QTimer.singleShot(600, lambda: set_leds(green=True))
@@ -1191,7 +1206,7 @@ class NomaAIApp(QMainWindow):
             img_array = self.preprocess_image(image)
             
             # AI inference
-            self.interpreter.set_tensor(self.input_details[0]['index'], img_array.astype(np.float32))
+            self.interpreter.set_tensor(self.input_details[0]['index'], img_array.astype(np.uint8))
             self.interpreter.invoke()
             predictions = self.interpreter.get_tensor(self.output_details[0]['index'])
             class_index = np.argmax(predictions[0])
@@ -1299,13 +1314,13 @@ class NomaAIApp(QMainWindow):
             self.results_label.setText(f"Model error: {str(e)}")
     
     def preprocess_image(self, image):
+        """Resize only – model includes its own rescaling to [-1,1]"""
         if image.mode != 'RGB':
             image = image.convert('RGB')
-        img_array = np.array(image.resize((224, 224)), dtype=np.float32)
-        img_array = (img_array / 127.5) - 1.0
+        img_array = np.array(image.resize((224, 224)), dtype=np.uint8)
         if len(img_array.shape) == 3:
             img_array = np.expand_dims(img_array, axis=0)
-        return img_array
+        return img_array  # return uint8 [0,255]
     
     # LED Control
     def set_leds(self, red=False, yellow=False, green=False):
@@ -1320,16 +1335,15 @@ class NomaAIApp(QMainWindow):
     
     # GPIO Reset
     def reset_gpio(self):
-        """Reset GPIO pins"""
+        """Reset GPIO: turn off LEDs without releasing pins"""
         reply = QMessageBox.question(
             self, "Reset GPIO", 
-            "Reset all GPIO pins to safe state?\n(This will turn off all LEDs)",
+            "Turn off all LEDs?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            # Cleanup GPIO
-            led_controller.cleanup()
-            QMessageBox.information(self, "GPIO Reset", "GPIO pins have been reset to safe state.")
+            self.turn_off_leds()
+            QMessageBox.information(self, "GPIO Reset", "All LEDs turned off.")
     
     # Shutdown
     def shutdown_device(self):
@@ -1345,6 +1359,7 @@ class NomaAIApp(QMainWindow):
     def closeEvent(self, event):
         """Handle application close"""
         print("Closing application...")
+        self.stop_yellow_blinking()
         self.camera_thread.stop()
         led_controller.cleanup()
         event.accept()
@@ -1362,5 +1377,4 @@ if __name__ == '__main__':
     
     # Ensure cleanup on exit
     app.aboutToQuit.connect(led_controller.cleanup)
-    
     sys.exit(app.exec_())
