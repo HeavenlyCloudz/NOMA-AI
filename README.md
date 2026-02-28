@@ -75,8 +75,11 @@ chmod +x /home/havil/noma_ai/start_noma.sh
 _Install service_
 
 sudo cp noma_ai.service /etc/systemd/system/
+
 sudo systemctl daemon-reload
+
 sudo systemctl enable noma_ai.service
+
 sudo systemctl start noma_ai.service
 
 _Check status_
