@@ -937,7 +937,12 @@ class NomaAIApp(QMainWindow):
         self.setWindowTitle("NOMA AI - Skin Analysis")
         self.showFullScreen()
         
-        # Set green background
+        # Get screen dimensions for touch calibration
+        screen_geometry = QApplication.primaryScreen().geometry()
+        self.screen_height = screen_geometry.height()
+        print(f"Screen height: {self.screen_height}")
+        
+        # Set the green background for the entire app
         self.setStyleSheet("""
             QMainWindow {
                 background-color: #b8fcbf;
@@ -945,59 +950,90 @@ class NomaAIApp(QMainWindow):
             QWidget {
                 background-color: #b8fcbf;
             }
+            QScrollArea {
+                border: none;
+                background-color: #b8fcbf;
+            }
         """)
         
-        # Create central widget
-        central_widget = QtWidgets.QWidget()
-        self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
-        layout.setSpacing(10)
-        layout.setContentsMargins(20, 20, 20, 20)
+        # Create scroll area for comprehensive results
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         
-        # Title
-        title_label = QLabel("NOMA AI - Step-by-Step Skin Analysis")
+        # Create a central widget with proper touch-friendly layout
+        central_widget = QtWidgets.QWidget()
+        self.scroll_area.setWidget(central_widget)
+        self.setCentralWidget(self.scroll_area)
+        
+        layout = QVBoxLayout(central_widget)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # NOMA AI Title
+        title_label = QLabel("NOMA AI - Advanced Skin Analysis")
         title_label.setAlignment(Qt.AlignCenter)
         title_label.setStyleSheet("""
-            font-size: 32px;
-            font-weight: bold;
-            color: #00695c;
-            padding: 20px;
-            background-color: #94ffed;
-            border-radius: 15px;
-            margin: 5px;
-        """)
-        layout.addWidget(title_label)
-        
-        # Camera preview
-        self.image_label = QLabel("Loading camera...")
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setMinimumSize(400, 300)
-        self.image_label.setMaximumSize(400, 300)
-        self.image_label.setStyleSheet("""
             QLabel {
-                background-color: black;
-                border: 3px solid #94ffed;
-                border-radius: 10px;
+                font-size: 36px;
+                font-weight: bold;
+                color: #00695c;
+                padding: 15px;
+                background-color: #94ffed;
+                border: 3px solid #80dfd0;
+                border-radius: 15px;
                 margin: 5px;
             }
         """)
-        layout.addWidget(self.image_label)
+        layout.addWidget(title_label)
+
+        # LARGER Camera preview - centered with container
+        self.image_label = QLabel("Loading camera feed...")
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setMinimumSize(400, 300)  # Larger preview
+        self.image_label.setMaximumSize(400, 300)  # Larger preview
+        self.image_label.setStyleSheet("""
+            QLabel {
+                background-color: white;
+                border: 3px solid #94ffed;
+                border-radius: 10px;
+                padding: 5px;
+                margin: 5px;
+            }
+        """)
         
-        # Capture button
-        self.classify_button = QPushButton("CAPTURE & ANALYZE")
-        self.classify_button.setMinimumHeight(80)
+        # Center the camera preview in its own container
+        camera_container = QtWidgets.QWidget()
+        camera_layout = QVBoxLayout(camera_container)
+        camera_layout.setAlignment(Qt.AlignCenter)
+        camera_layout.addWidget(self.image_label)
+        layout.addWidget(camera_container)
+
+        # HUGE Classify button with improved touch area
+        self.classify_button = QPushButton("CAPTURE AND ANALYZE COMPREHENSIVELY")
+        self.classify_button.setMinimumHeight(100)
+        self.classify_button.setObjectName("classify_button")
         self.classify_button.setStyleSheet("""
-            QPushButton {
+            QPushButton#classify_button {
                 font-size: 24px;
                 font-weight: bold;
-                padding: 20px;
+                padding: 20px 15px;
                 background-color: #94ffed;
                 color: #00695c;
                 border: 4px solid #80dfd0;
-                border-radius: 15px;
+                border-radius: 20px;
                 margin: 10px;
             }
-            QPushButton:disabled {
+            QPushButton#classify_button:hover {
+                background-color: #a8fff0;
+                border: 4px solid #94ffed;
+            }
+            QPushButton#classify_button:pressed {
+                background-color: #80dfd0;
+                color: #004d40;
+            }
+            QPushButton#classify_button:disabled {
                 background-color: #c8fcf5;
                 color: #80a09c;
             }
@@ -1005,17 +1041,45 @@ class NomaAIApp(QMainWindow):
         self.classify_button.clicked.connect(self.classify_image)
         self.classify_button.setEnabled(False)
         layout.addWidget(self.classify_button)
-        
+
+        # LED GUIDE Button
+        self.led_guide_button = QPushButton("LED STATUS GUIDE")
+        self.led_guide_button.setMinimumHeight(80)
+        self.led_guide_button.setStyleSheet("""
+            QPushButton {
+                font-size: 20px;
+                font-weight: bold;
+                padding: 15px 10px;
+                background-color: #ffd794;
+                color: #654700;
+                border: 4px solid #dfc080;
+                border-radius: 20px;
+                margin: 10px;
+            }
+            QPushButton:hover {
+                background-color: #ffe7a8;
+                border: 4px solid #ffd794;
+            }
+            QPushButton:pressed {
+                background-color: #dfc080;
+                color: #402d00;
+            }
+        """)
+        self.led_guide_button.clicked.connect(self.show_led_guide)
+        layout.addWidget(self.led_guide_button)
+
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setRange(0, 0)
+        self.progress_bar.setMinimumHeight(25)
         self.progress_bar.setStyleSheet("""
             QProgressBar {
                 border: 2px solid #94ffed;
                 border-radius: 10px;
-                height: 25px;
+                text-align: center;
                 background-color: white;
+                margin: 5px;
             }
             QProgressBar::chunk {
                 background-color: #94ffed;
@@ -1023,110 +1087,182 @@ class NomaAIApp(QMainWindow):
             }
         """)
         layout.addWidget(self.progress_bar)
-        
-        # Results area
+
+        # Results display area
         self.results_label = QLabel("")
-        self.results_label.setWordWrap(True)
+        self.results_label.setAlignment(Qt.AlignLeft)
         self.results_label.setStyleSheet("""
             QLabel {
-                font-size: 16px;
+                font-size: 14px;
                 background-color: #defcee;
-                padding: 20px;
+                padding: 15px;
                 border: 2px solid #94ffed;
                 border-radius: 10px;
-                margin: 10px;
-                min-height: 150px;
+                margin: 5px;
             }
         """)
+        self.results_label.setWordWrap(True)
+        self.results_label.setMinimumHeight(150)
         layout.addWidget(self.results_label)
-        
-        # Grad-CAM display
-        self.gradcam_label = QLabel("Analysis visualization will appear here")
-        self.gradcam_label.setAlignment(Qt.AlignCenter)
-        self.gradcam_label.setMinimumSize(400, 300)
-        self.gradcam_label.setMaximumSize(400, 300)
-        self.gradcam_label.setStyleSheet("""
+
+        # Analysis image display
+        self.analysis_label = QLabel("")
+        self.analysis_label.setAlignment(Qt.AlignCenter)
+        self.analysis_label.setMinimumSize(400, 300)
+        self.analysis_label.setStyleSheet("""
             QLabel {
                 background-color: #defcee;
                 border: 2px solid #94ffed;
                 border-radius: 10px;
                 padding: 5px;
-                margin: 10px;
+                margin: 5px;
             }
         """)
-        layout.addWidget(self.gradcam_label)
-        
-        # Buttons layout
-        button_layout = QHBoxLayout()
-        
-        self.led_guide_button = QPushButton("LED GUIDE")
-        self.led_guide_button.setMinimumHeight(60)
-        self.led_guide_button.setStyleSheet("""
-            QPushButton {
-                font-size: 18px;
-                font-weight: bold;
-                padding: 15px;
-                background-color: #ffd794;
-                color: #654700;
-                border: 3px solid #dfc080;
-                border-radius: 15px;
-            }
-        """)
-        self.led_guide_button.clicked.connect(self.show_led_guide)
-        button_layout.addWidget(self.led_guide_button)
-        
-        self.reset_button = QPushButton("RESET GPIO")
-        self.reset_button.setMinimumHeight(60)
-        self.reset_button.setStyleSheet("""
-            QPushButton {
-                font-size: 18px;
-                font-weight: bold;
-                padding: 15px;
-                background-color: #ffb74d;
-                color: #654700;
-                border: 3px solid #ff9800;
-                border-radius: 15px;
-            }
-        """)
-        self.reset_button.clicked.connect(self.reset_gpio)
-        button_layout.addWidget(self.reset_button)
-        
-        button_layout.addStretch(1)
-        
-        self.shutdown_button = QPushButton("SHUTDOWN")
-        self.shutdown_button.setMinimumHeight(60)
+        layout.addWidget(self.analysis_label)
+
+        # Large Shutdown button
+        self.shutdown_button = QPushButton("SHUTDOWN DEVICE")
+        self.shutdown_button.setMinimumHeight(80)
+        self.shutdown_button.setObjectName("shutdown_button")
         self.shutdown_button.setStyleSheet("""
-            QPushButton {
-                font-size: 18px;
+            QPushButton#shutdown_button {
+                font-size: 20px;
                 font-weight: bold;
-                padding: 15px;
+                padding: 15px 10px;
                 background-color: #ff9494;
                 color: #690000;
-                border: 3px solid #df8080;
-                border-radius: 15px;
+                border: 4px solid #df8080;
+                border-radius: 20px;
+                margin: 10px;
+            }
+            QPushButton#shutdown_button:hover {
+                background-color: #ffa8a8;
+                border: 4px solid #ff9494;
+            }
+            QPushButton#shutdown_button:pressed {
+                background-color: #df8080;
+                color: #400000;
             }
         """)
         self.shutdown_button.clicked.connect(self.shutdown_device)
-        button_layout.addWidget(self.shutdown_button)
-        
-        layout.addLayout(button_layout)
-        
-        # Disclaimer
-        disclaimer = QLabel("*Not a medical diagnosis. For educational use only.*")
-        disclaimer.setAlignment(Qt.AlignCenter)
-        disclaimer.setStyleSheet("font-size: 12px; color: #666; font-style: italic; margin-top: 10px;")
-        layout.addWidget(disclaimer)
-        
+        layout.addWidget(self.shutdown_button)
+
+        # Safety disclaimer
+        disclaimer_label = QLabel("*Not a medical diagnosis. For educational use only.*")
+        disclaimer_label.setAlignment(Qt.AlignCenter)
+        disclaimer_label.setStyleSheet("""
+            QLabel {
+                font-size: 12px;
+                font-style: italic;
+                color: #666;
+                padding: 5px;
+                margin: 5px;
+            }
+        """)
+        layout.addWidget(disclaimer_label)
+
+        # Add stretch at bottom to help centering
         layout.addStretch(1)
     
     def show_led_guide(self):
-        """Show LED guide"""
-        QMessageBox.information(self, "LED Guide",
-            "🔴 RED: High risk - See doctor urgently\n"
-            "🟡 YELLOW: Moderate risk - Monitor closely\n"
-            "🟢 GREEN: Low risk - Continue regular checks\n"
-            "🟡 BLINKING: Answering clinical questions\n"
-            "🟢 PATTERN: Assessment complete")
+        """Show LED status guide in a scrollable dialog with exit button"""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("LED Status Guide")
+        dialog.setMinimumSize(500, 400)
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #b8fcbf;
+            }
+            QTextEdit {
+                background-color: white;
+                border: 2px solid #94ffed;
+                border-radius: 10px;
+                padding: 15px;
+                font-size: 14px;
+                line-height: 1.4;
+            }
+        """)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Title
+        title = QLabel("LED STATUS GUIDE")
+        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #00695c; padding: 10px;")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+        
+        # Scrollable text area
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setHtml("""
+        <h3>YELLOW BLINKING:</h3>
+        <ul>
+        <li>System is analyzing your image</li>
+        <li>Please wait while processing completes</li>
+        <li>This takes about 5-10 seconds</li>
+        </ul>
+        
+        <h3>SOLID RED:</h3>
+        <ul>
+        <li>MALIGNANT detection</li>
+        <li>High risk potential</li>
+        <li>Consult dermatologist promptly</li>
+        <li>Examples: Melanoma, Basal Cell Carcinoma, Squamous Cell Carcinoma</li>
+        </ul>
+        
+        <h3>SOLID YELLOW:</h3>
+        <ul>
+        <li>BENIGN detection</li>
+        <li>Moderate risk or uncertain</li>
+        <li>Monitor regularly</li>
+        <li>Examples: Moles, Eczema, Psoriasis, Acne, Rosacea</li>
+        </ul>
+        
+        <h3>SOLID GREEN:</h3>
+        <ul>
+        <li>NORMAL skin</li>
+        <li>Low risk</li>
+        <li>Continue regular self-checks</li>
+        <li>Example: Healthy skin tissue</li>
+        </ul>
+        
+        <h3>ADDITIONAL NOTES:</h3>
+        <ul>
+        <li>All LEDs turn off automatically after 8 seconds</li>
+        <li>Low confidence results will show yellow LED with recommendation to retake image</li>
+        <li>Ensure good lighting and clear focus for best results</li>
+        <li>Position lesion clearly in the center of the camera view</li>
+        </ul>
+        """)
+        layout.addWidget(text_edit)
+        
+        # Exit button
+        exit_button = QPushButton("CLOSE GUIDE")
+        exit_button.setMinimumHeight(50)
+        exit_button.setStyleSheet("""
+            QPushButton {
+                font-size: 16px;
+                font-weight: bold;
+                padding: 12px;
+                background-color: #94ffed;
+                color: #00695c;
+                border: 3px solid #80dfd0;
+                border-radius: 15px;
+                margin: 10px;
+            }
+            QPushButton:hover {
+                background-color: #a8fff0;
+                border: 3px solid #94ffed;
+            }
+            QPushButton:pressed {
+                background-color: #80dfd0;
+                color: #004d40;
+            }
+        """)
+        exit_button.clicked.connect(dialog.accept)
+        layout.addWidget(exit_button)
+        
+        dialog.exec_()
     
     # LED Methods
     def start_yellow_blinking_for_dialog(self):
@@ -1206,7 +1342,7 @@ class NomaAIApp(QMainWindow):
             img_array = self.preprocess_image(image)
             
             # AI inference
-            self.interpreter.set_tensor(self.input_details[0]['index'], img_array.astype(np.uint8))
+            self.interpreter.set_tensor(self.input_details[0]['index'], img_array)
             self.interpreter.invoke()
             predictions = self.interpreter.get_tensor(self.output_details[0]['index'])
             class_index = np.argmax(predictions[0])
@@ -1240,7 +1376,7 @@ class NomaAIApp(QMainWindow):
                 pixmap = QtGui.QPixmap.fromImage(heatmap_qimage).scaled(
                     400, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation
                 )
-                self.gradcam_label.setPixmap(pixmap)
+                self.analysis_label.setPixmap(pixmap)
                 
                 # Set LED
                 led_color = results['led_color']
@@ -1308,19 +1444,42 @@ class NomaAIApp(QMainWindow):
             self.input_details = self.interpreter.get_input_details()
             self.output_details = self.interpreter.get_output_details()
             print("Model loaded successfully")
+            print(f"Input dtype: {self.input_details[0]['dtype']}")
+            print(f"Input shape: {self.input_details[0]['shape']}")
             self.classify_button.setEnabled(True)
         except Exception as e:
             print(f"Model error: {e}")
             self.results_label.setText(f"Model error: {str(e)}")
     
     def preprocess_image(self, image):
-        """Resize only – model includes its own rescaling to [-1,1]"""
+        """Adapt preprocessing to model's expected dtype and shape."""
         if image.mode != 'RGB':
             image = image.convert('RGB')
-        img_array = np.array(image.resize((224, 224)), dtype=np.uint8)
-        if len(img_array.shape) == 3:
+        img_array = np.array(image.resize((224, 224)), dtype=np.float32)
+        
+        # Get expected dtype from model
+        expected_dtype = self.input_details[0]['dtype']
+        expected_shape = self.input_details[0]['shape']
+        
+        # Normalize to [-1,1] if model expects float32 (typical for MobileNetV3 without rescaling)
+        if expected_dtype == np.float32:
+            img_array = (img_array / 127.5) - 1.0
+        # If model expects uint8, leave as [0,255] (the model should have internal rescaling)
+        elif expected_dtype == np.uint8:
+            img_array = img_array.astype(np.uint8)
+        else:
+            # Fallback: assume float32 normalization
+            img_array = (img_array / 127.5) - 1.0
+        
+        # Add batch dimension if needed
+        if len(expected_shape) == 4 and len(img_array.shape) == 3:
             img_array = np.expand_dims(img_array, axis=0)
-        return img_array  # return uint8 [0,255]
+        elif len(expected_shape) == 3 and len(img_array.shape) == 4:
+            img_array = img_array.squeeze(0)
+        
+        # Ensure correct dtype
+        img_array = img_array.astype(expected_dtype)
+        return img_array
     
     # LED Control
     def set_leds(self, red=False, yellow=False, green=False):
@@ -1377,4 +1536,5 @@ if __name__ == '__main__':
     
     # Ensure cleanup on exit
     app.aboutToQuit.connect(led_controller.cleanup)
+    
     sys.exit(app.exec_())
