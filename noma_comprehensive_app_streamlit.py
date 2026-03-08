@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from streamlit_option_menu import option_menu
 import hashlib
+import io
 
 # Page config
 st.set_page_config(
@@ -89,6 +90,12 @@ st.markdown("""
         background: #f8f9fa;
         border-radius: 0 10px 10px 0;
     }
+    .heatmap-container {
+        border: 2px solid #667eea;
+        border-radius: 10px;
+        padding: 10px;
+        margin: 10px 0;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -106,15 +113,31 @@ if 'authenticated' not in st.session_state:
 @st.cache_resource
 def load_ai_model():
     try:
-        model = load_model('right_noma_model.keras')
-        return model
-    except:
-        st.warning("Model not found. Running in demo mode with simulated predictions.")
-        return None
+        # Use your specific model name
+        model = load_model('noma_cancer_ai_model.keras')
+        
+        # Get the last convolutional layer for Grad-CAM
+        # This might need adjustment based on your model architecture
+        last_conv_layer_name = None
+        
+        # Try to find the last conv layer automatically
+        for layer in reversed(model.layers):
+            if 'conv' in layer.name.lower() or 'pool' in layer.name.lower():
+                last_conv_layer_name = layer.name
+                break
+        
+        if last_conv_layer_name is None:
+            # Fallback to a common naming pattern
+            last_conv_layer_name = 'Conv_1'  # Adjust this based on your model
+            
+        return model, last_conv_layer_name
+    except Exception as e:
+        st.warning(f"Model not found or error loading: {e}. Running in demo mode with simulated predictions.")
+        return None, None
 
-model = load_ai_model()
+model, last_conv_layer = load_ai_model()
 
-# Define classes
+# Define classes (update this list to match your model's classes)
 classes = [
     "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous",
     "Candidiasis", "Drug Eruption", "Eczema", "Infestations/Bites",
@@ -127,6 +150,61 @@ classes = [
 malignant_classes = ["Melanoma", "Basal Cell Carcinoma", "Squamous Cell Carcinoma"]
 benign_classes = [c for c in classes if c not in malignant_classes + ["Normal"]]
 normal_classes = ["Normal"]
+
+# ==================== GRAD-CAM IMPLEMENTATION ====================
+def make_gradcam_heatmap(img_array, model, last_conv_layer_name, pred_index=None):
+    """Generate Grad-CAM heatmap"""
+    try:
+        # Create a model that maps the input image to the activations of the last conv layer
+        grad_model = tf.keras.models.Model(
+            [model.inputs], 
+            [model.get_layer(last_conv_layer_name).output, model.output]
+        )
+
+        # Compute the gradient of the top predicted class for the conv layer output
+        with tf.GradientTape() as tape:
+            conv_outputs, predictions = grad_model(img_array)
+            if pred_index is None:
+                pred_index = tf.argmax(predictions[0])
+            class_channel = predictions[:, pred_index]
+
+        # Gradient of the class output with respect to the feature map
+        grads = tape.gradient(class_channel, conv_outputs)
+
+        # Global average pooling of gradients
+        pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+
+        # Weight the channels by corresponding gradients
+        conv_outputs = conv_outputs[0]
+        heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
+        heatmap = tf.squeeze(heatmap)
+
+        # Normalize the heatmap
+        heatmap = tf.maximum(heatmap, 0) / tf.math.reduce_max(heatmap)
+        return heatmap.numpy()
+    except Exception as e:
+        st.error(f"Grad-CAM error: {e}")
+        return None
+
+def overlay_heatmap(heatmap, image, alpha=0.4):
+    """Overlay heatmap on original image"""
+    try:
+        # Resize heatmap to match image size
+        heatmap = cv2.resize(heatmap, (image.width, image.height))
+        
+        # Convert heatmap to RGB
+        heatmap = np.uint8(255 * heatmap)
+        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+        
+        # Convert original image to numpy array
+        original = np.array(image.convert('RGB'))
+        
+        # Overlay heatmap on original image
+        superimposed = cv2.addWeighted(heatmap, alpha, original, 1 - alpha, 0)
+        return Image.fromarray(superimposed)
+    except Exception as e:
+        st.error(f"Heatmap overlay error: {e}")
+        return image
 
 # ==================== AUTHENTICATION ====================
 def simple_auth():
@@ -425,25 +503,43 @@ def calculate_risk_score():
         'patient_details': patient
     }
 
-# ==================== IMAGE ANALYSIS ====================
+# ==================== IMAGE ANALYSIS WITH GRAD-CAM ====================
 def analyze_image(image, clinical_risk):
-    """Analyze skin image with AI model"""
+    """Analyze skin image with AI model and generate Grad-CAM"""
     
     if model is None:
         # Simulate predictions for demo
         pred_class = np.random.choice(classes)
         confidence = np.random.uniform(0.6, 0.95)
+        heatmap_img = None
     else:
-        # Preprocess image
-        img = image.resize((224, 224))
-        img_array = np.array(img) / 255.0
-        img_array = np.expand_dims(img_array, axis=0)
-        
-        # Make prediction
-        predictions = model.predict(img_array)
-        class_idx = np.argmax(predictions[0])
-        confidence = predictions[0][class_idx]
-        pred_class = classes[class_idx]
+        try:
+            # Preprocess image for the model
+            img = image.resize((224, 224))
+            img_array = np.array(img) / 255.0
+            img_array = np.expand_dims(img_array, axis=0).astype(np.float32)
+            
+            # Make prediction
+            predictions = model.predict(img_array, verbose=0)
+            class_idx = np.argmax(predictions[0])
+            confidence = float(predictions[0][class_idx])
+            pred_class = classes[class_idx] if class_idx < len(classes) else f"Class_{class_idx}"
+            
+            # Generate Grad-CAM heatmap
+            if last_conv_layer:
+                heatmap = make_gradcam_heatmap(img_array, model, last_conv_layer, class_idx)
+                if heatmap is not None:
+                    heatmap_img = overlay_heatmap(heatmap, img)
+                else:
+                    heatmap_img = None
+            else:
+                heatmap_img = None
+                
+        except Exception as e:
+            st.error(f"Model inference error: {e}")
+            pred_class = "Error in analysis"
+            confidence = 0.0
+            heatmap_img = None
     
     # Determine class type
     if pred_class in malignant_classes:
@@ -452,20 +548,24 @@ def analyze_image(image, clinical_risk):
     elif pred_class in benign_classes:
         class_type = "BENIGN"
         base_risk = 30
-    else:
+    elif pred_class == "Normal":
         class_type = "NORMAL"
         base_risk = 10
+    else:
+        class_type = "UNKNOWN"
+        base_risk = 50
     
     # Combine with clinical risk
     combined_risk = (base_risk * 0.6 + clinical_risk['total_risk'] * 0.4)
     
     return {
         'predicted_class': pred_class,
-        'confidence': float(confidence),
+        'confidence': float(confidence) if isinstance(confidence, (int, float)) else 0.0,
         'class_type': class_type,
         'base_risk': base_risk,
         'combined_risk': combined_risk,
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'heatmap': heatmap_img
     }
 
 # ==================== TRACKING DASHBOARD ====================
@@ -535,7 +635,7 @@ def tracking_dashboard():
                     <span><b>{assessment['timestamp']}</b></span>
                     <span>{risk_color} Risk: {assessment['combined_risk']:.1f}</span>
                 </div>
-                <div>AI: {assessment['predicted_class']} ({assessment['confidence']:.1%})</div>
+                <div>AI: {assessment['predicted_class']} ({assessment.get('confidence', 0):.1%})</div>
                 <div>Type: {assessment['class_type']}</div>
             </div>
             """, unsafe_allow_html=True)
@@ -556,7 +656,7 @@ def main():
     st.markdown("""
     <div class="main-header">
         <h1>🩹 NOMA AI - Clinical Skin Analysis & Tracking</h1>
-        <p>Advanced AI-powered skin lesion analysis with longitudinal patient tracking</p>
+        <p>Advanced AI-powered skin lesion analysis with Grad-CAM visualization</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -621,7 +721,7 @@ def main():
                 st.rerun()
     
     elif selected == "Image Analysis":
-        st.markdown("### 📸 Skin Image Analysis")
+        st.markdown("### 📸 Skin Image Analysis with Grad-CAM")
         
         if 'clinical_risk' not in st.session_state:
             st.warning("Please complete clinical assessment first")
@@ -652,9 +752,9 @@ def main():
                         image = Image.open(camera_image)
                 
                 if 'image' in locals():
-                    if st.button("🔬 Analyze Image", use_container_width=True, type="primary"):
-                        with st.spinner("Analyzing image with AI..."):
-                            # Analyze image
+                    if st.button("🔬 Analyze Image with Grad-CAM", use_container_width=True, type="primary"):
+                        with st.spinner("Analyzing image with AI and generating Grad-CAM..."):
+                            # Analyze image with Grad-CAM
                             ai_results = analyze_image(image, st.session_state['clinical_risk'])
                             st.session_state['ai_results'] = ai_results
                             
@@ -666,6 +766,9 @@ def main():
                                     'clinical_risk': st.session_state['clinical_risk']['total_risk'],
                                     'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                                 }
+                                # Remove heatmap from saved data (can't serialize image)
+                                if 'heatmap' in assessment:
+                                    del assessment['heatmap']
                                 patient['assessments'].append(assessment)
                             
                             st.success("Analysis complete!")
@@ -709,6 +812,22 @@ def main():
                     **Clinical Risk:** {clinical['total_risk']:.1f}/100  
                     **Combined Score:** {results['combined_risk']:.1f}/100
                     """)
+                    
+                    # Display Grad-CAM heatmap
+                    if results.get('heatmap') is not None:
+                        st.markdown("#### 🔥 Grad-CAM Visualization")
+                        st.markdown("""
+                        <div class="heatmap-container">
+                            <p style="text-align: center;"><i>Areas in red show regions the AI focused on for its decision</i></p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Display original and heatmap side by side
+                        heat_col1, heat_col2 = st.columns(2)
+                        with heat_col1:
+                            st.image(image, caption="Original Image", use_container_width=True)
+                        with heat_col2:
+                            st.image(results['heatmap'], caption="Grad-CAM Heatmap", use_container_width=True)
                     
                     # Action buttons
                     col_a, col_b = st.columns(2)
@@ -758,19 +877,20 @@ def main():
             with col2:
                 st.markdown("#### Condition Frequency")
                 top_conditions = df['predicted_class'].value_counts().head(5)
-                fig = px.bar(
-                    x=top_conditions.values,
-                    y=top_conditions.index,
-                    orientation='h',
-                    title="Most Common Conditions"
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                if not top_conditions.empty:
+                    fig = px.bar(
+                        x=top_conditions.values,
+                        y=top_conditions.index,
+                        orientation='h',
+                        title="Most Common Conditions"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
             
             # Full history table
             st.markdown("#### All Assessments")
             display_df = df[['timestamp', 'predicted_class', 'class_type', 'confidence', 'combined_risk']]
             display_df.columns = ['Date', 'Condition', 'Type', 'Confidence', 'Risk Score']
-            display_df['Confidence'] = display_df['Confidence'].apply(lambda x: f"{x:.1%}")
+            display_df['Confidence'] = display_df['Confidence'].apply(lambda x: f"{x:.1%}" if pd.notna(x) else "N/A")
             display_df['Risk Score'] = display_df['Risk Score'].apply(lambda x: f"{x:.1f}")
             
             st.dataframe(display_df, use_container_width=True)
