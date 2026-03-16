@@ -15,10 +15,222 @@ from streamlit_option_menu import option_menu
 import hashlib
 import io
 
+# ==================== USER AUTHENTICATION SYSTEM ====================
+
+# File to store user credentials
+USER_DATA_FILE = "users.json"
+
+def hash_password(password):
+    """Hash a password for secure storage"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def load_users():
+    """Load users from JSON file"""
+    if os.path.exists(USER_DATA_FILE):
+        try:
+            with open(USER_DATA_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_users(users):
+    """Save users to JSON file"""
+    with open(USER_DATA_FILE, 'w') as f:
+        json.dump(users, f, indent=2)
+
+def create_user(username, password, email, full_name, role="doctor"):
+    """Create a new user account"""
+    users = load_users()
+    
+    # Check if username exists
+    if username in users:
+        return False, "Username already exists"
+    
+    # Check if email exists
+    for user_data in users.values():
+        if user_data.get('email') == email:
+            return False, "Email already registered"
+    
+    # Create new user
+    users[username] = {
+        'password': hash_password(password),
+        'email': email,
+        'full_name': full_name,
+        'role': role,
+        'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'last_login': None
+    }
+    
+    save_users(users)
+    return True, "Account created successfully"
+
+def authenticate_user(username, password):
+    """Authenticate a user"""
+    users = load_users()
+    
+    if username not in users:
+        return False, "Invalid username or password"
+    
+    if users[username]['password'] != hash_password(password):
+        return False, "Invalid username or password"
+    
+    # Update last login
+    users[username]['last_login'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    save_users(users)
+    
+    return True, users[username]
+
+def change_password(username, old_password, new_password):
+    """Change user password"""
+    users = load_users()
+    
+    if username not in users:
+        return False, "User not found"
+    
+    if users[username]['password'] != hash_password(old_password):
+        return False, "Current password is incorrect"
+    
+    users[username]['password'] = hash_password(new_password)
+    save_users(users)
+    return True, "Password changed successfully"
+
+def logout():
+    """Log out the current user"""
+    for key in ['authenticated', 'username', 'user_info', 'auth_page']:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.rerun()
+
+# ==================== AUTHENTICATION UI ====================
+
+def authentication_ui():
+    """Main authentication interface"""
+    
+    # Create columns for centering the auth form
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        st.markdown("""
+        <div style="text-align: center; margin-bottom: 30px;">
+            <h1>🩹 NOMA AI</h1>
+            <h3>Clinical Skin Analysis System</h3>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Tab selection
+        tab1, tab2 = st.tabs(["🔐 Login", "📝 Register"])
+        
+        with tab1:
+            with st.form("login_form"):
+                st.markdown("### Login to Your Account")
+                
+                username = st.text_input("Username", placeholder="Enter your username")
+                password = st.text_input("Password", type="password", placeholder="Enter your password")
+                
+                submit = st.form_submit_button("Login", use_container_width=True, type="primary")
+                
+                if submit:
+                    if not username or not password:
+                        st.error("Please enter both username and password")
+                    else:
+                        success, result = authenticate_user(username, password)
+                        
+                        if success:
+                            st.session_state.authenticated = True
+                            st.session_state.username = username
+                            st.session_state.user_info = result
+                            st.success(f"Welcome back, {result['full_name']}!")
+                            st.rerun()
+                        else:
+                            st.error(result)
+        
+        with tab2:
+            with st.form("register_form"):
+                st.markdown("### Create New Account")
+                st.markdown("Fill in the details below to register")
+                
+                full_name = st.text_input("Full Name*", placeholder="Dr. John Doe")
+                email = st.text_input("Email*", placeholder="doctor@hospital.com")
+                username = st.text_input("Username*", placeholder="dr_john_doe")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    password = st.text_input("Password*", type="password", 
+                                           placeholder="Min. 8 characters")
+                with col2:
+                    confirm_password = st.text_input("Confirm Password*", type="password")
+                
+                role = st.selectbox("Role", ["doctor", "nurse", "researcher", "clinician"])
+                
+                terms = st.checkbox("I agree to the Terms and Conditions*")
+                
+                submitted = st.form_submit_button("Register", use_container_width=True, type="primary")
+                
+                if submitted:
+                    # Validation
+                    if not all([full_name, email, username, password, confirm_password]):
+                        st.error("Please fill in all required fields")
+                    elif password != confirm_password:
+                        st.error("Passwords do not match")
+                    elif len(password) < 8:
+                        st.error("Password must be at least 8 characters long")
+                    elif not terms:
+                        st.error("You must agree to the Terms and Conditions")
+                    else:
+                        # Create account
+                        success, message = create_user(username, password, email, full_name, role)
+                        
+                        if success:
+                            st.success("✅ Account created successfully! You can now login.")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {message}")
+
+def user_profile_ui():
+    """User profile management interface"""
+    with st.expander("👤 User Profile", expanded=False):
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            st.markdown(f"""
+            **User:** {st.session_state.user_info.get('full_name', 'N/A')}  
+            **Role:** {st.session_state.user_info.get('role', 'N/A')}  
+            **Username:** {st.session_state.username}  
+            **Email:** {st.session_state.user_info.get('email', 'N/A')}  
+            **Member since:** {st.session_state.user_info.get('created_at', 'N/A')}
+            """)
+        
+        with col2:
+            # Change password
+            with st.form("change_password"):
+                st.markdown("#### Change Password")
+                old_pw = st.text_input("Current Password", type="password")
+                new_pw = st.text_input("New Password", type="password")
+                confirm_pw = st.text_input("Confirm New Password", type="password")
+                
+                if st.form_submit_button("Update Password"):
+                    if not old_pw or not new_pw or not confirm_pw:
+                        st.error("Please fill in all fields")
+                    elif new_pw != confirm_pw:
+                        st.error("New passwords do not match")
+                    elif len(new_pw) < 8:
+                        st.error("Password must be at least 8 characters")
+                    else:
+                        success, message = change_password(
+                            st.session_state.username, 
+                            old_pw, 
+                            new_pw
+                        )
+                        if success:
+                            st.success("Password updated successfully!")
+                        else:
+                            st.error(message)
+
 # Page config
 st.set_page_config(
     page_title="NOMA AI - Clinical Tracker",
-    page_icon="🩹",
+    page_icon="🦠",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -205,32 +417,6 @@ def overlay_heatmap(heatmap, image, alpha=0.4):
     except Exception as e:
         st.error(f"Heatmap overlay error: {e}")
         return image
-
-# ==================== AUTHENTICATION ====================
-def simple_auth():
-    """Simple authentication system"""
-    st.sidebar.markdown("### 🔐 Authentication")
-    
-    if not st.session_state.authenticated:
-        with st.sidebar.form("login_form"):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            submit = st.form_submit_button("Login")
-            
-            if submit:
-                # Simple authentication - in production, use proper auth
-                if username == "doctor" and password == "noma2024":
-                    st.session_state.authenticated = True
-                    st.rerun()
-                else:
-                    st.error("Invalid credentials")
-        return False
-    else:
-        st.sidebar.success(f"Logged in as: Doctor")
-        if st.sidebar.button("Logout"):
-            st.session_state.authenticated = False
-            st.rerun()
-        return True
 
 # ==================== PATIENT MANAGEMENT ====================
 def patient_management():
@@ -652,6 +838,11 @@ def tracking_dashboard():
 
 # ==================== MAIN APP ====================
 def main():
+    # Check authentication
+    if 'authenticated' not in st.session_state or not st.session_state.authenticated:
+        authentication_ui()
+        return
+    
     # Header
     st.markdown("""
     <div class="main-header">
@@ -660,9 +851,19 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
-    # Authentication
-    if not simple_auth():
-        st.stop()
+    # Add user profile and logout in sidebar
+    with st.sidebar:
+        st.markdown(f"### 👋 Welcome, {st.session_state.user_info.get('full_name', 'User')}")
+        st.markdown(f"**Role:** {st.session_state.user_info.get('role', 'N/A')}")
+        
+        # User profile expander
+        user_profile_ui()
+        
+        # Logout button
+        if st.button("🚪 Logout", use_container_width=True):
+            logout()
+        
+        st.markdown("---")
     
     # Patient management
     patient_management()
@@ -740,162 +941,4 @@ def main():
                 if img_source == "Upload":
                     uploaded_file = st.file_uploader(
                         "Choose an image...", 
-                        type=['jpg', 'jpeg', 'png'],
-                        help="Upload a clear image of the skin lesion"
-                    )
-                    if uploaded_file:
-                        image = Image.open(uploaded_file)
-                        st.image(image, caption="Uploaded Image", use_container_width=True)
-                else:
-                    camera_image = st.camera_input("Take a picture")
-                    if camera_image:
-                        image = Image.open(camera_image)
-                
-                if 'image' in locals():
-                    if st.button("🔬 Analyze Image with Grad-CAM", use_container_width=True, type="primary"):
-                        with st.spinner("Analyzing image with AI and generating Grad-CAM..."):
-                            # Analyze image with Grad-CAM
-                            ai_results = analyze_image(image, st.session_state['clinical_risk'])
-                            st.session_state['ai_results'] = ai_results
-                            
-                            # Save assessment
-                            if st.session_state.current_patient_id:
-                                patient = st.session_state.patients[st.session_state.current_patient_id]
-                                assessment = {
-                                    **ai_results,
-                                    'clinical_risk': st.session_state['clinical_risk']['total_risk'],
-                                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                                }
-                                # Remove heatmap from saved data (can't serialize image)
-                                if 'heatmap' in assessment:
-                                    del assessment['heatmap']
-                                patient['assessments'].append(assessment)
-                            
-                            st.success("Analysis complete!")
-                            st.rerun()
-            
-            with col2:
-                if 'ai_results' in st.session_state:
-                    results = st.session_state['ai_results']
-                    clinical = st.session_state['clinical_risk']
-                    
-                    st.markdown("#### Analysis Results")
-                    
-                    # Risk display
-                    combined_risk = results['combined_risk']
-                    if combined_risk >= 70:
-                        st.markdown(f"""
-                        <div class="risk-high">
-                            <h4 style="text-align: center;">HIGH RISK</h4>
-                            <p style="text-align: center; font-size: 20px;">{combined_risk:.1f}/100</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    elif combined_risk >= 40:
-                        st.markdown(f"""
-                        <div class="risk-medium">
-                            <h4 style="text-align: center;">MEDIUM RISK</h4>
-                            <p style="text-align: center; font-size: 20px;">{combined_risk:.1f}/100</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"""
-                        <div class="risk-low">
-                            <h4 style="text-align: center;">LOW RISK</h4>
-                            <p style="text-align: center; font-size: 20px;">{combined_risk:.1f}/100</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    st.markdown(f"""
-                    **AI Prediction:** {results['predicted_class']}  
-                    **Confidence:** {results['confidence']:.1%}  
-                    **Lesion Type:** {results['class_type']}  
-                    **Clinical Risk:** {clinical['total_risk']:.1f}/100  
-                    **Combined Score:** {results['combined_risk']:.1f}/100
-                    """)
-                    
-                    # Display Grad-CAM heatmap
-                    if results.get('heatmap') is not None:
-                        st.markdown("#### 🔥 Grad-CAM Visualization")
-                        st.markdown("""
-                        <div class="heatmap-container">
-                            <p style="text-align: center;"><i>Areas in red show regions the AI focused on for its decision</i></p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        # Display original and heatmap side by side
-                        heat_col1, heat_col2 = st.columns(2)
-                        with heat_col1:
-                            st.image(image, caption="Original Image", use_container_width=True)
-                        with heat_col2:
-                            st.image(results['heatmap'], caption="Grad-CAM Heatmap", use_container_width=True)
-                    
-                    # Action buttons
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        if st.button("📋 Save to Record", use_container_width=True):
-                            st.success("Assessment saved to patient record!")
-                    with col_b:
-                        if st.button("🔄 New Assessment", use_container_width=True):
-                            for key in ['clinical_risk', 'ai_results', 'clinical_complete']:
-                                if key in st.session_state:
-                                    del st.session_state[key]
-                            st.rerun()
-    
-    elif selected == "Tracking Dashboard":
-        tracking_dashboard()
-    
-    elif selected == "Patient History":
-        st.markdown("### 📜 Complete Patient History")
-        
-        if not st.session_state.current_patient_id:
-            st.warning("Please select a patient")
-            return
-        
-        patient = st.session_state.patients[st.session_state.current_patient_id]
-        assessments = patient.get('assessments', [])
-        
-        if assessments:
-            # Summary statistics
-            df = pd.DataFrame(assessments)
-            
-            # Advanced analytics
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("#### Risk Distribution")
-                fig = px.pie(
-                    names=['Low Risk (<40)', 'Medium Risk (40-70)', 'High Risk (>70)'],
-                    values=[
-                        len(df[df['combined_risk'] < 40]),
-                        len(df[(df['combined_risk'] >= 40) & (df['combined_risk'] < 70)]),
-                        len(df[df['combined_risk'] >= 70])
-                    ],
-                    color_discrete_sequence=['#26de81', '#ffa502', '#ff4757']
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                st.markdown("#### Condition Frequency")
-                top_conditions = df['predicted_class'].value_counts().head(5)
-                if not top_conditions.empty:
-                    fig = px.bar(
-                        x=top_conditions.values,
-                        y=top_conditions.index,
-                        orientation='h',
-                        title="Most Common Conditions"
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-            
-            # Full history table
-            st.markdown("#### All Assessments")
-            display_df = df[['timestamp', 'predicted_class', 'class_type', 'confidence', 'combined_risk']]
-            display_df.columns = ['Date', 'Condition', 'Type', 'Confidence', 'Risk Score']
-            display_df['Confidence'] = display_df['Confidence'].apply(lambda x: f"{x:.1%}" if pd.notna(x) else "N/A")
-            display_df['Risk Score'] = display_df['Risk Score'].apply(lambda x: f"{x:.1f}")
-            
-            st.dataframe(display_df, use_container_width=True)
-        else:
-            st.info("No assessment history available")
-
-if __name__ == "__main__":
-    main()
+                        type=['jpg', 'jpeg', 'png
