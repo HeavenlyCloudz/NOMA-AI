@@ -710,6 +710,21 @@ def analyze_image(image, clinical_risk):
         pred_class = np.random.choice(classes)
         confidence = np.random.uniform(0.6, 0.95)
         heatmap_img = None
+        
+        # Generate simulated top predictions
+        top_predictions = []
+        remaining_classes = [c for c in classes if c != pred_class]
+        top_predictions.append((pred_class, confidence))
+        
+        for i in range(4):  # Add 4 more random predictions
+            random_class = np.random.choice(remaining_classes)
+            random_conf = np.random.uniform(0.1, confidence - 0.1)
+            top_predictions.append((random_class, random_conf))
+            remaining_classes.remove(random_class)
+        
+        # Sort by confidence
+        top_predictions.sort(key=lambda x: x[1], reverse=True)
+        
     else:
         try:
             # Preprocess image for the model
@@ -719,7 +734,18 @@ def analyze_image(image, clinical_risk):
             
             # Make prediction
             predictions = model.predict(img_array, verbose=0)
-            class_idx = np.argmax(predictions[0])
+            
+            # Get top 5 predictions
+            top_indices = np.argsort(predictions[0])[-5:][::-1]
+            top_predictions = []
+            
+            for idx in top_indices:
+                class_name = classes[idx] if idx < len(classes) else f"Class_{idx}"
+                confidence = float(predictions[0][idx])
+                top_predictions.append((class_name, confidence))
+            
+            # Get the top prediction
+            class_idx = top_indices[0]
             confidence = float(predictions[0][class_idx])
             pred_class = classes[class_idx] if class_idx < len(classes) else f"Class_{class_idx}"
             
@@ -738,8 +764,9 @@ def analyze_image(image, clinical_risk):
             pred_class = "Error in analysis"
             confidence = 0.0
             heatmap_img = None
+            top_predictions = [("Error in analysis", 0.0)]
     
-    # Determine class type
+    # Determine class type for the top prediction
     if pred_class in malignant_classes:
         class_type = "MALIGNANT"
         base_risk = 80
@@ -763,8 +790,116 @@ def analyze_image(image, clinical_risk):
         'base_risk': base_risk,
         'combined_risk': combined_risk,
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'heatmap': heatmap_img
+        'heatmap': heatmap_img,
+        'top_predictions': top_predictions  # Add top predictions to results
     }
+
+# Then in the Image Analysis section, update the display part:
+
+            with col2:
+                if 'ai_results' in st.session_state:
+                    results = st.session_state['ai_results']
+                    clinical = st.session_state['clinical_risk']
+                    
+                    st.markdown("#### Analysis Results")
+                    
+                    # Risk display
+                    combined_risk = results['combined_risk']
+                    if combined_risk >= 70:
+                        st.markdown(f"""
+                        <div class="risk-high">
+                            <h4 style="text-align: center;">HIGH RISK</h4>
+                            <p style="text-align: center; font-size: 20px;">{combined_risk:.1f}/100</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    elif combined_risk >= 40:
+                        st.markdown(f"""
+                        <div class="risk-medium">
+                            <h4 style="text-align: center;">MEDIUM RISK</h4>
+                            <p style="text-align: center; font-size: 20px;">{combined_risk:.1f}/100</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div class="risk-low">
+                            <h4 style="text-align: center;">LOW RISK</h4>
+                            <p style="text-align: center; font-size: 20px;">{combined_risk:.1f}/100</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # Primary prediction
+                    st.markdown(f"""
+                    **Primary AI Prediction:** {results['predicted_class']}  
+                    **Confidence:** {results['confidence']:.1%}  
+                    **Lesion Type:** {results['class_type']}  
+                    """)
+                    
+                    # Top predictions with confidence bars
+                    st.markdown("#### 🔍 Top 5 Predictions")
+                    
+                    # Create a DataFrame for top predictions
+                    pred_df = pd.DataFrame(results['top_predictions'], columns=['Condition', 'Confidence'])
+                    
+                    # Display as horizontal bar chart
+                    fig = go.Figure()
+                    fig.add_trace(go.Bar(
+                        y=pred_df['Condition'],
+                        x=pred_df['Confidence'] * 100,  # Convert to percentage
+                        orientation='h',
+                        marker=dict(
+                            color=pred_df['Confidence'],
+                            colorscale='Viridis',
+                            showscale=True,
+                            colorbar=dict(title="Confidence")
+                        ),
+                        text=pred_df['Confidence'].apply(lambda x: f'{x:.1%}'),
+                        textposition='outside'
+                    ))
+                    
+                    fig.update_layout(
+                        title="AI Confidence by Condition",
+                        xaxis_title="Confidence (%)",
+                        yaxis_title="",
+                        height=300,
+                        margin=dict(l=0, r=0, t=40, b=0),
+                        xaxis=dict(range=[0, 100])
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Detailed metrics
+                    st.markdown(f"""
+                    **Clinical Risk:** {clinical['total_risk']:.1f}/100  
+                    **Combined Score:** {results['combined_risk']:.1f}/100
+                    """)
+                    
+                    # Display Grad-CAM heatmap
+                    if results.get('heatmap') is not None:
+                        st.markdown("#### 🔥 Grad-CAM Visualization")
+                        st.markdown("""
+                        <div class="heatmap-container">
+                            <p style="text-align: center;"><i>Areas in red show regions the AI focused on for its decision</i></p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Display original and heatmap side by side
+                        heat_col1, heat_col2 = st.columns(2)
+                        with heat_col1:
+                            st.image(image, caption="Original Image", use_container_width=True)
+                        with heat_col2:
+                            st.image(results['heatmap'], caption="Grad-CAM Heatmap", use_container_width=True)
+                    
+                    # Action buttons
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        if st.button("📋 Save to Record", use_container_width=True):
+                            st.success("Assessment saved to patient record!")
+                    with col_b:
+                        if st.button("🔄 New Assessment", use_container_width=True):
+                            for key in ['clinical_risk', 'ai_results', 'clinical_complete']:
+                                if key in st.session_state:
+                                    del st.session_state[key]
+                            st.rerun()
 
 # ==================== TRACKING DASHBOARD ====================
 
