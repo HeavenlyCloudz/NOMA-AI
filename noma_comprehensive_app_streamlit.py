@@ -794,113 +794,6 @@ def analyze_image(image, clinical_risk):
         'top_predictions': top_predictions  # Add top predictions to results
     }
 
-# Then in the Image Analysis section, update the display part:
-
-            with col2:
-                if 'ai_results' in st.session_state:
-                    results = st.session_state['ai_results']
-                    clinical = st.session_state['clinical_risk']
-                    
-                    st.markdown("#### Analysis Results")
-                    
-                    # Risk display
-                    combined_risk = results['combined_risk']
-                    if combined_risk >= 70:
-                        st.markdown(f"""
-                        <div class="risk-high">
-                            <h4 style="text-align: center;">HIGH RISK</h4>
-                            <p style="text-align: center; font-size: 20px;">{combined_risk:.1f}/100</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    elif combined_risk >= 40:
-                        st.markdown(f"""
-                        <div class="risk-medium">
-                            <h4 style="text-align: center;">MEDIUM RISK</h4>
-                            <p style="text-align: center; font-size: 20px;">{combined_risk:.1f}/100</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"""
-                        <div class="risk-low">
-                            <h4 style="text-align: center;">LOW RISK</h4>
-                            <p style="text-align: center; font-size: 20px;">{combined_risk:.1f}/100</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    # Primary prediction
-                    st.markdown(f"""
-                    **Primary AI Prediction:** {results['predicted_class']}  
-                    **Confidence:** {results['confidence']:.1%}  
-                    **Lesion Type:** {results['class_type']}  
-                    """)
-                    
-                    # Top predictions with confidence bars
-                    st.markdown("#### 🔍 Top 5 Predictions")
-                    
-                    # Create a DataFrame for top predictions
-                    pred_df = pd.DataFrame(results['top_predictions'], columns=['Condition', 'Confidence'])
-                    
-                    # Display as horizontal bar chart
-                    fig = go.Figure()
-                    fig.add_trace(go.Bar(
-                        y=pred_df['Condition'],
-                        x=pred_df['Confidence'] * 100,  # Convert to percentage
-                        orientation='h',
-                        marker=dict(
-                            color=pred_df['Confidence'],
-                            colorscale='Viridis',
-                            showscale=True,
-                            colorbar=dict(title="Confidence")
-                        ),
-                        text=pred_df['Confidence'].apply(lambda x: f'{x:.1%}'),
-                        textposition='outside'
-                    ))
-                    
-                    fig.update_layout(
-                        title="AI Confidence by Condition",
-                        xaxis_title="Confidence (%)",
-                        yaxis_title="",
-                        height=300,
-                        margin=dict(l=0, r=0, t=40, b=0),
-                        xaxis=dict(range=[0, 100])
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Detailed metrics
-                    st.markdown(f"""
-                    **Clinical Risk:** {clinical['total_risk']:.1f}/100  
-                    **Combined Score:** {results['combined_risk']:.1f}/100
-                    """)
-                    
-                    # Display Grad-CAM heatmap
-                    if results.get('heatmap') is not None:
-                        st.markdown("#### 🔥 Grad-CAM Visualization")
-                        st.markdown("""
-                        <div class="heatmap-container">
-                            <p style="text-align: center;"><i>Areas in red show regions the AI focused on for its decision</i></p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        # Display original and heatmap side by side
-                        heat_col1, heat_col2 = st.columns(2)
-                        with heat_col1:
-                            st.image(image, caption="Original Image", use_container_width=True)
-                        with heat_col2:
-                            st.image(results['heatmap'], caption="Grad-CAM Heatmap", use_container_width=True)
-                    
-                    # Action buttons
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        if st.button("📋 Save to Record", use_container_width=True):
-                            st.success("Assessment saved to patient record!")
-                    with col_b:
-                        if st.button("🔄 New Assessment", use_container_width=True):
-                            for key in ['clinical_risk', 'ai_results', 'clinical_complete']:
-                                if key in st.session_state:
-                                    del st.session_state[key]
-                            st.rerun()
-
 # ==================== TRACKING DASHBOARD ====================
 
 def tracking_dashboard():
@@ -1156,10 +1049,48 @@ def main():
                         </div>
                         """, unsafe_allow_html=True)
                     
+                    # Primary prediction
                     st.markdown(f"""
-                    **AI Prediction:** {results['predicted_class']}  
+                    **Primary AI Prediction:** {results['predicted_class']}  
                     **Confidence:** {results['confidence']:.1%}  
                     **Lesion Type:** {results['class_type']}  
+                    """)
+                    
+                    # Top predictions with confidence bars
+                    st.markdown("#### 🔍 Top 5 Predictions")
+                    
+                    # Create a DataFrame for top predictions
+                    pred_df = pd.DataFrame(results['top_predictions'], columns=['Condition', 'Confidence'])
+                    
+                    # Display as horizontal bar chart
+                    fig = go.Figure()
+                    fig.add_trace(go.Bar(
+                        y=pred_df['Condition'],
+                        x=pred_df['Confidence'] * 100,  # Convert to percentage
+                        orientation='h',
+                        marker=dict(
+                            color=pred_df['Confidence'],
+                            colorscale='Viridis',
+                            showscale=True,
+                            colorbar=dict(title="Confidence")
+                        ),
+                        text=pred_df['Confidence'].apply(lambda x: f'{x:.1%}'),
+                        textposition='outside'
+                    ))
+                    
+                    fig.update_layout(
+                        title="AI Confidence by Condition",
+                        xaxis_title="Confidence (%)",
+                        yaxis_title="",
+                        height=300,
+                        margin=dict(l=0, r=0, t=40, b=0),
+                        xaxis=dict(range=[0, 100])
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Detailed metrics
+                    st.markdown(f"""
                     **Clinical Risk:** {clinical['total_risk']:.1f}/100  
                     **Combined Score:** {results['combined_risk']:.1f}/100
                     """)
