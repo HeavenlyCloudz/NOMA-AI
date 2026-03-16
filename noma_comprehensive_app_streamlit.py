@@ -114,6 +114,8 @@ if 'user_info' not in st.session_state:
     st.session_state.user_info = None
 if 'auth_page' not in st.session_state:
     st.session_state.auth_page = 'login'
+if 'show_main_app' not in st.session_state:
+    st.session_state.show_main_app = False
 
 # ==================== USER AUTHENTICATION SYSTEM ====================
 
@@ -197,9 +199,10 @@ def change_password(username, old_password, new_password):
 
 def logout():
     """Log out the current user"""
-    for key in ['authenticated', 'username', 'user_info', 'auth_page']:
-        if key in st.session_state:
-            del st.session_state[key]
+    st.session_state.authenticated = False
+    st.session_state.show_main_app = False
+    st.session_state.username = None
+    st.session_state.user_info = None
     st.rerun()
 
 def authentication_ui():
@@ -236,9 +239,9 @@ def authentication_ui():
                         
                         if success:
                             st.session_state.authenticated = True
+                            st.session_state.show_main_app = True
                             st.session_state.username = username
                             st.session_state.user_info = result
-                            st.session_state.auth_page = 'main'
                             st.success(f"Welcome back, {result['full_name']}!")
                             st.rerun()
                         else:
@@ -849,11 +852,12 @@ def tracking_dashboard():
 # ==================== MAIN APP ====================
 
 def main():
-    # Check authentication
-    if 'authenticated' not in st.session_state or not st.session_state.authenticated:
+    # Check if user is authenticated
+    if not st.session_state.authenticated:
         authentication_ui()
         return
     
+    # If authenticated, show the main app
     # Header
     st.markdown("""
     <div class="main-header">
