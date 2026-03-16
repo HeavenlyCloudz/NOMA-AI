@@ -112,10 +112,6 @@ if 'username' not in st.session_state:
     st.session_state.username = None
 if 'user_info' not in st.session_state:
     st.session_state.user_info = None
-if 'auth_page' not in st.session_state:
-    st.session_state.auth_page = 'login'
-if 'show_main_app' not in st.session_state:
-    st.session_state.show_main_app = False
 
 # ==================== USER AUTHENTICATION SYSTEM ====================
 
@@ -200,7 +196,6 @@ def change_password(username, old_password, new_password):
 def logout():
     """Log out the current user"""
     st.session_state.authenticated = False
-    st.session_state.show_main_app = False
     st.session_state.username = None
     st.session_state.user_info = None
     st.rerun()
@@ -239,7 +234,6 @@ def authentication_ui():
                         
                         if success:
                             st.session_state.authenticated = True
-                            st.session_state.show_main_app = True
                             st.session_state.username = username
                             st.session_state.user_info = result
                             st.success(f"Welcome back, {result['full_name']}!")
@@ -376,10 +370,13 @@ normal_classes = ["Normal"]
 def make_gradcam_heatmap(img_array, model, last_conv_layer_name, pred_index=None):
     """Generate Grad-CAM heatmap"""
     try:
+        # Get the last convolutional layer
+        last_conv_layer = model.get_layer(last_conv_layer_name)
+        
         # Create a model that maps the input image to the activations of the last conv layer
         grad_model = tf.keras.models.Model(
-            [model.inputs], 
-            [model.get_layer(last_conv_layer_name).output, model.output]
+            inputs=model.inputs,
+            outputs=[last_conv_layer.output, model.output]
         )
 
         # Compute the gradient of the top predicted class for the conv layer output
@@ -397,7 +394,7 @@ def make_gradcam_heatmap(img_array, model, last_conv_layer_name, pred_index=None
 
         # Weight the channels by corresponding gradients
         conv_outputs = conv_outputs[0]
-        heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
+        heatmap = tf.matmul(conv_outputs, pooled_grads[..., tf.newaxis])
         heatmap = tf.squeeze(heatmap)
 
         # Normalize the heatmap
@@ -410,18 +407,21 @@ def make_gradcam_heatmap(img_array, model, last_conv_layer_name, pred_index=None
 def overlay_heatmap(heatmap, image, alpha=0.4):
     """Overlay heatmap on original image"""
     try:
+        # Convert PIL Image to numpy array if needed
+        if isinstance(image, Image.Image):
+            image_np = np.array(image.convert('RGB'))
+        else:
+            image_np = image
+            
         # Resize heatmap to match image size
-        heatmap = cv2.resize(heatmap, (image.width, image.height))
+        heatmap = cv2.resize(heatmap, (image_np.shape[1], image_np.shape[0]))
         
         # Convert heatmap to RGB
         heatmap = np.uint8(255 * heatmap)
         heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
         
-        # Convert original image to numpy array
-        original = np.array(image.convert('RGB'))
-        
         # Overlay heatmap on original image
-        superimposed = cv2.addWeighted(heatmap, alpha, original, 1 - alpha, 0)
+        superimposed = cv2.addWeighted(heatmap, alpha, image_np, 1 - alpha, 0)
         return Image.fromarray(superimposed)
     except Exception as e:
         st.error(f"Heatmap overlay error: {e}")
@@ -840,7 +840,7 @@ def tracking_dashboard():
             """, unsafe_allow_html=True)
     
     # Export data
-    if st.button("📥 Export Patient Data"):
+    if st.button("📥 Export Patient Data", use_container_width=True):
         csv = df.to_csv(index=False)
         st.download_button(
             label="Download CSV",
@@ -941,7 +941,7 @@ def main():
         
         if 'clinical_risk' not in st.session_state:
             st.warning("Please complete clinical assessment first")
-            if st.button("Go to Clinical Assessment"):
+            if st.button("Go to Clinical Assessment", use_container_width=True):
                 st.session_state['nav_to_clinical'] = True
                 st.rerun()
         else:
