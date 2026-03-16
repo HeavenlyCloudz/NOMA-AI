@@ -1,9 +1,18 @@
-streamlit 
-pillow 
-numpy 
-tensorflow 
-opencv-python 
-matplotlib 
-pandas 
-plotly 
-streamlit-option-menu
+# Core
+streamlit>=1.28.0
+numpy>=1.24.0
+pandas>=2.0.0
+Pillow>=10.0.0
+
+# TensorFlow (lighter version for deployment)
+tensorflow-cpu>=2.13.0
+
+# OpenCV - headless version (no GUI dependencies)
+opencv-python-headless>=4.8.0
+
+# Visualization
+matplotlib>=3.7.0
+plotly>=5.17.0
+
+# Utils
+streamlit-option-menu>=0.3.6
