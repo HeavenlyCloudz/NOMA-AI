@@ -710,21 +710,6 @@ def analyze_image(image, clinical_risk):
         pred_class = np.random.choice(classes)
         confidence = np.random.uniform(0.6, 0.95)
         heatmap_img = None
-        
-        # Generate simulated top predictions
-        top_predictions = []
-        remaining_classes = [c for c in classes if c != pred_class]
-        top_predictions.append((pred_class, confidence))
-        
-        for i in range(4):  # Add 4 more random predictions
-            random_class = np.random.choice(remaining_classes)
-            random_conf = np.random.uniform(0.1, confidence - 0.1)
-            top_predictions.append((random_class, random_conf))
-            remaining_classes.remove(random_class)
-        
-        # Sort by confidence
-        top_predictions.sort(key=lambda x: x[1], reverse=True)
-        
     else:
         try:
             # Preprocess image for the model
@@ -734,18 +719,7 @@ def analyze_image(image, clinical_risk):
             
             # Make prediction
             predictions = model.predict(img_array, verbose=0)
-            
-            # Get top 5 predictions
-            top_indices = np.argsort(predictions[0])[-5:][::-1]
-            top_predictions = []
-            
-            for idx in top_indices:
-                class_name = classes[idx] if idx < len(classes) else f"Class_{idx}"
-                confidence = float(predictions[0][idx])
-                top_predictions.append((class_name, confidence))
-            
-            # Get the top prediction
-            class_idx = top_indices[0]
+            class_idx = np.argmax(predictions[0])
             confidence = float(predictions[0][class_idx])
             pred_class = classes[class_idx] if class_idx < len(classes) else f"Class_{class_idx}"
             
@@ -764,9 +738,8 @@ def analyze_image(image, clinical_risk):
             pred_class = "Error in analysis"
             confidence = 0.0
             heatmap_img = None
-            top_predictions = [("Error in analysis", 0.0)]
     
-    # Determine class type for the top prediction
+    # Determine class type
     if pred_class in malignant_classes:
         class_type = "MALIGNANT"
         base_risk = 80
@@ -790,8 +763,7 @@ def analyze_image(image, clinical_risk):
         'base_risk': base_risk,
         'combined_risk': combined_risk,
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'heatmap': heatmap_img,
-        'top_predictions': top_predictions  # Add top predictions to results
+        'heatmap': heatmap_img
     }
 
 # ==================== TRACKING DASHBOARD ====================
@@ -1049,48 +1021,10 @@ def main():
                         </div>
                         """, unsafe_allow_html=True)
                     
-                    # Primary prediction
                     st.markdown(f"""
-                    **Primary AI Prediction:** {results['predicted_class']}  
+                    **AI Prediction:** {results['predicted_class']}  
                     **Confidence:** {results['confidence']:.1%}  
                     **Lesion Type:** {results['class_type']}  
-                    """)
-                    
-                    # Top predictions with confidence bars
-                    st.markdown("#### 🔍 Top 5 Predictions")
-                    
-                    # Create a DataFrame for top predictions
-                    pred_df = pd.DataFrame(results['top_predictions'], columns=['Condition', 'Confidence'])
-                    
-                    # Display as horizontal bar chart
-                    fig = go.Figure()
-                    fig.add_trace(go.Bar(
-                        y=pred_df['Condition'],
-                        x=pred_df['Confidence'] * 100,  # Convert to percentage
-                        orientation='h',
-                        marker=dict(
-                            color=pred_df['Confidence'],
-                            colorscale='Viridis',
-                            showscale=True,
-                            colorbar=dict(title="Confidence")
-                        ),
-                        text=pred_df['Confidence'].apply(lambda x: f'{x:.1%}'),
-                        textposition='outside'
-                    ))
-                    
-                    fig.update_layout(
-                        title="AI Confidence by Condition",
-                        xaxis_title="Confidence (%)",
-                        yaxis_title="",
-                        height=300,
-                        margin=dict(l=0, r=0, t=40, b=0),
-                        xaxis=dict(range=[0, 100])
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Detailed metrics
-                    st.markdown(f"""
                     **Clinical Risk:** {clinical['total_risk']:.1f}/100  
                     **Combined Score:** {results['combined_risk']:.1f}/100
                     """)
