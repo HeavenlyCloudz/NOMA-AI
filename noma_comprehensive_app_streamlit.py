@@ -96,20 +96,6 @@ st.markdown("""
         padding: 10px;
         margin: 10px 0;
     }
-    .prediction-box {
-        background: linear-gradient(135deg, #667eea20 0%, #764ba220 100%);
-        border: 2px solid #667eea;
-        border-radius: 10px;
-        padding: 20px;
-        margin: 10px 0;
-    }
-    .top-prediction {
-        font-size: 24px;
-        font-weight: bold;
-        color: #667eea;
-        text-align: center;
-        padding: 10px;
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -126,10 +112,6 @@ if 'username' not in st.session_state:
     st.session_state.username = None
 if 'user_info' not in st.session_state:
     st.session_state.user_info = None
-if 'clinical_complete' not in st.session_state:
-    st.session_state.clinical_complete = False
-if 'clinical_risk' not in st.session_state:
-    st.session_state.clinical_risk = None
 
 # ==================== USER AUTHENTICATION SYSTEM ====================
 
@@ -728,16 +710,6 @@ def analyze_image(image, clinical_risk):
         pred_class = np.random.choice(classes)
         confidence = np.random.uniform(0.6, 0.95)
         heatmap_img = None
-        top_predictions = []
-        for i in range(5):
-            random_class = np.random.choice(classes)
-            random_conf = np.random.uniform(0.1, 0.9)
-            top_predictions.append({
-                'class': random_class,
-                'confidence': random_conf,
-                'type': 'MALIGNANT' if random_class in malignant_classes else 'BENIGN' if random_class in benign_classes else 'NORMAL'
-            })
-        top_predictions.sort(key=lambda x: x['confidence'], reverse=True)
     else:
         try:
             # Preprocess image for the model
@@ -747,24 +719,9 @@ def analyze_image(image, clinical_risk):
             
             # Make prediction
             predictions = model.predict(img_array, verbose=0)
-            
-            # Get top 5 predictions
-            top_indices = np.argsort(predictions[0])[-5:][::-1]
-            top_predictions = []
-            for idx in top_indices:
-                pred_class = classes[idx] if idx < len(classes) else f"Class_{idx}"
-                confidence = float(predictions[0][idx])
-                class_type = "MALIGNANT" if pred_class in malignant_classes else "BENIGN" if pred_class in benign_classes else "NORMAL"
-                top_predictions.append({
-                    'class': pred_class,
-                    'confidence': confidence,
-                    'type': class_type
-                })
-            
-            # Get top prediction
-            class_idx = top_indices[0]
-            confidence = top_predictions[0]['confidence']
-            pred_class = top_predictions[0]['class']
+            class_idx = np.argmax(predictions[0])
+            confidence = float(predictions[0][class_idx])
+            pred_class = classes[class_idx] if class_idx < len(classes) else f"Class_{class_idx}"
             
             # Generate Grad-CAM heatmap
             if last_conv_layer:
@@ -781,9 +738,8 @@ def analyze_image(image, clinical_risk):
             pred_class = "Error in analysis"
             confidence = 0.0
             heatmap_img = None
-            top_predictions = []
     
-    # Determine class type for top prediction
+    # Determine class type
     if pred_class in malignant_classes:
         class_type = "MALIGNANT"
         base_risk = 80
@@ -797,8 +753,8 @@ def analyze_image(image, clinical_risk):
         class_type = "UNKNOWN"
         base_risk = 50
     
-    # Combine with clinical risk - NOW GIVING MORE WEIGHT TO AI MODEL (80% AI, 20% Clinical)
-    combined_risk = (base_risk * 0.8 + clinical_risk['total_risk'] * 0.2)
+    # Combine with clinical risk
+    combined_risk = (base_risk * 0.6 + clinical_risk['total_risk'] * 0.4)
     
     return {
         'predicted_class': pred_class,
@@ -807,8 +763,7 @@ def analyze_image(image, clinical_risk):
         'base_risk': base_risk,
         'combined_risk': combined_risk,
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'heatmap': heatmap_img,
-        'top_predictions': top_predictions
+        'heatmap': heatmap_img
     }
 
 # ==================== TRACKING DASHBOARD ====================
@@ -945,8 +900,7 @@ def main():
         risk_results = clinical_assessment_wizard()
         
         if risk_results:
-            st.session_state.clinical_risk = risk_results
-            st.session_state.clinical_complete = True
+            st.session_state['clinical_risk'] = risk_results
             
             # Display results
             col1, col2 = st.columns(2)
@@ -975,6 +929,9 @@ def main():
                 st.markdown("#### Clinical Recommendations")
                 st.info(risk_results['recommendation'])
             
+            # Store in session
+            st.session_state['clinical_complete'] = True
+            
             if st.button("Proceed to Image Analysis →", use_container_width=True):
                 st.session_state['nav_to_image'] = True
                 st.rerun()
@@ -982,12 +939,8 @@ def main():
     elif selected == "Image Analysis":
         st.markdown("### 📸 Skin Image Analysis with Grad-CAM")
         
-        # Check if clinical assessment is completed
-        if not st.session_state.clinical_complete or st.session_state.clinical_risk is None:
-            st.warning("⚠️ Please complete the Clinical Assessment first before proceeding to Image Analysis")
-            st.info("Go to the 'Clinical Assessment' tab to complete the assessment")
-            
-            # Show a helpful button
+        if 'clinical_risk' not in st.session_state:
+            st.warning("Please complete clinical assessment first")
             if st.button("Go to Clinical Assessment", use_container_width=True):
                 st.session_state['nav_to_clinical'] = True
                 st.rerun()
@@ -1018,7 +971,7 @@ def main():
                     if st.button("🔬 Analyze Image with Grad-CAM", use_container_width=True, type="primary"):
                         with st.spinner("Analyzing image with AI and generating Grad-CAM..."):
                             # Analyze image with Grad-CAM
-                            ai_results = analyze_image(image, st.session_state.clinical_risk)
+                            ai_results = analyze_image(image, st.session_state['clinical_risk'])
                             st.session_state['ai_results'] = ai_results
                             
                             # Save assessment
@@ -1026,15 +979,12 @@ def main():
                                 patient = st.session_state.patients[st.session_state.current_patient_id]
                                 assessment = {
                                     **ai_results,
-                                    'clinical_risk': st.session_state.clinical_risk['total_risk'],
+                                    'clinical_risk': st.session_state['clinical_risk']['total_risk'],
                                     'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                                 }
                                 # Remove heatmap from saved data (can't serialize image)
                                 if 'heatmap' in assessment:
                                     del assessment['heatmap']
-                                if 'top_predictions' in assessment:
-                                    # Keep top_predictions but they might be large
-                                    pass
                                 patient['assessments'].append(assessment)
                             
                             st.success("Analysis complete!")
@@ -1043,40 +993,11 @@ def main():
             with col2:
                 if 'ai_results' in st.session_state:
                     results = st.session_state['ai_results']
-                    clinical = st.session_state.clinical_risk
+                    clinical = st.session_state['clinical_risk']
                     
-                    st.markdown("#### AI Analysis Results")
-                    
-                    # Display top prediction prominently
-                    st.markdown(f"""
-                    <div class="prediction-box">
-                        <div class="top-prediction">🎯 {results['predicted_class']}</div>
-                        <p style="text-align: center;">Confidence: {results['confidence']:.1%}</p>
-                        <p style="text-align: center;">Type: <b>{results['class_type']}</b></p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Display top 5 predictions
-                    if results.get('top_predictions'):
-                        st.markdown("#### Top 5 Possible Conditions")
-                        for i, pred in enumerate(results['top_predictions']):
-                            confidence_pct = pred['confidence'] * 100
-                            bar_width = int(confidence_pct)
-                            color = "#ff4757" if pred['type'] == "MALIGNANT" else "#ffa502" if pred['type'] == "BENIGN" else "#26de81"
-                            st.markdown(f"""
-                            <div style="margin: 5px 0;">
-                                <div style="display: flex; justify-content: space-between;">
-                                    <span>{i+1}. {pred['class']} ({pred['type']})</span>
-                                    <span>{confidence_pct:.1f}%</span>
-                                </div>
-                                <div style="background-color: #f0f0f0; height: 10px; border-radius: 5px;">
-                                    <div style="background-color: {color}; width: {confidence_pct}%; height: 10px; border-radius: 5px;"></div>
-                                </div>
-                            </div>
-                            """, unsafe_allow_html=True)
+                    st.markdown("#### Analysis Results")
                     
                     # Risk display
-                    st.markdown("#### Risk Assessment")
                     combined_risk = results['combined_risk']
                     if combined_risk >= 70:
                         st.markdown(f"""
@@ -1101,9 +1022,11 @@ def main():
                         """, unsafe_allow_html=True)
                     
                     st.markdown(f"""
-                    **AI Model Confidence:** {results['confidence']:.1%}  
+                    **AI Prediction:** {results['predicted_class']}  
+                    **Confidence:** {results['confidence']:.1%}  
+                    **Lesion Type:** {results['class_type']}  
                     **Clinical Risk:** {clinical['total_risk']:.1f}/100  
-                    **Combined Score (80% AI, 20% Clinical):** {results['combined_risk']:.1f}/100
+                    **Combined Score:** {results['combined_risk']:.1f}/100
                     """)
                     
                     # Display Grad-CAM heatmap
@@ -1129,7 +1052,7 @@ def main():
                             st.success("Assessment saved to patient record!")
                     with col_b:
                         if st.button("🔄 New Assessment", use_container_width=True):
-                            for key in ['ai_results']:
+                            for key in ['clinical_risk', 'ai_results', 'clinical_complete']:
                                 if key in st.session_state:
                                     del st.session_state[key]
                             st.rerun()
