@@ -26,7 +26,8 @@ from PyQt5.QtWidgets import (QLabel, QVBoxLayout, QPushButton, QApplication,
                              QMessageBox, QProgressBar, QMainWindow, QScrollArea,
                              QWidget, QHBoxLayout, QTextEdit, QRadioButton,
                              QSpinBox, QComboBox, QCheckBox, QGroupBox)
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QPointF
+from PyQt5.QtGui import QPainter, QPen, QColor, QBrush
 from PIL import Image
 import os
 from datetime import datetime
@@ -131,9 +132,97 @@ def turn_off_leds():
     """Turn all LEDs off"""
     led_controller.all_off()
 
-# ---------------- STEP-BY-STEP CLINICAL ASSESSOR ---------------- #
+# ---------------- SWIPEABLE STEP-BY-STEP CLINICAL ASSESSOR ---------------- #
+class SwipeableWidget(QtWidgets.QWidget):
+    """A widget that detects swipe gestures for navigation without blocking child widgets"""
+    
+    swipe_left = pyqtSignal()
+    swipe_right = pyqtSignal()
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
+        self.touch_start_pos = None
+        self.swipe_threshold = 100  # minimum distance for swipe
+        self.touch_in_progress = False
+        self.touch_start_time = None
+        self.max_swipe_time = 500  # max milliseconds for a swipe
+        
+    def touchEvent(self, event):
+        touch_points = event.touchPoints()
+        if len(touch_points) == 1:
+            touch = touch_points[0]
+            
+            if event.type() == QtCore.QEvent.TouchBegin:
+                self.touch_start_pos = touch.pos()
+                self.touch_start_time = time.time()
+                self.touch_in_progress = True
+                event.accept()
+                return True
+                
+            elif event.type() == QtCore.QEvent.TouchEnd and self.touch_in_progress:
+                if self.touch_start_pos and self.touch_start_time:
+                    end_pos = touch.pos()
+                    delta_x = end_pos.x() - self.touch_start_pos.x()
+                    delta_time = (time.time() - self.touch_start_time) * 1000  # convert to ms
+                    
+                    # Only trigger swipe if it's fast enough and far enough
+                    if delta_time < self.max_swipe_time and abs(delta_x) > self.swipe_threshold:
+                        # Find the widget under the touch point
+                        widget_under_touch = self.childAt(end_pos.toPoint())
+                        
+                        # Only trigger swipe if we're not touching an interactive widget
+                        if not self.is_interactive_widget(widget_under_touch):
+                            if delta_x > 0:  # right swipe
+                                self.swipe_right.emit()
+                            else:  # left swipe
+                                self.swipe_left.emit()
+                            event.accept()
+                            self.touch_in_progress = False
+                            self.touch_start_pos = None
+                            return True
+                
+                self.touch_in_progress = False
+                self.touch_start_pos = None
+                event.accept()
+                return True
+        
+        return super().touchEvent(event)
+    
+    def is_interactive_widget(self, widget):
+        """Check if the widget is interactive (should receive touches instead of swipe)"""
+        if widget is None:
+            return False
+        
+        # List of widget types that should get touch priority
+        interactive_types = (
+            QtWidgets.QRadioButton,
+            QtWidgets.QCheckBox,
+            QtWidgets.QPushButton,
+            QtWidgets.QComboBox,
+            QtWidgets.QSpinBox,
+            QtWidgets.QScrollBar,
+            QtWidgets.QSlider
+        )
+        
+        # Check if widget or its parent is interactive
+        current = widget
+        while current:
+            if isinstance(current, interactive_types):
+                return True
+            current = current.parent()
+        
+        return False
+    
+    def event(self, event):
+        if event.type() == QtCore.QEvent.TouchBegin or \
+           event.type() == QtCore.QEvent.TouchUpdate or \
+           event.type() == QtCore.QEvent.TouchEnd:
+            return self.touchEvent(event)
+        return super().event(event)
+
 class StepByStepClinicalAssessor(QtWidgets.QDialog):
-    """Step-by-step clinical assessment wizard with progress bar"""
+    """Step-by-step clinical assessment wizard with progress bar and swipe navigation"""
     
     def __init__(self, parent=None, cnn_prediction="", cnn_confidence=0.0):
         super().__init__(parent)
@@ -165,7 +254,7 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         
         self.initUI()
         
-        # Start yellow LED blinking
+        # Start yellow LED blinking (with 10 second timeout)
         if self.parent_app:
             self.parent_app.start_yellow_blinking_for_dialog()
         
@@ -202,21 +291,76 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
                 border-radius: 8px;
             }
             QRadioButton {
-                font-size: 14px;
-                margin: 5px;
-                padding: 5px;
+                font-size: 18px;
+                margin: 8px;
+                padding: 8px;
+                spacing: 8px;
+                background-color: transparent;
+            }
+            QRadioButton::indicator {
+                width: 20px;
+                height: 20px;
+            }
+            QRadioButton:hover {
+                color: #00695c;
+                font-weight: bold;
             }
             QSpinBox {
-                font-size: 16px;
-                padding: 5px;
+                font-size: 18px;
+                padding: 8px;
+                min-height: 30px;
+                border: 2px solid #94ffed;
+                border-radius: 8px;
+                background-color: white;
             }
             QComboBox {
-                font-size: 14px;
-                padding: 5px;
+                font-size: 16px;
+                padding: 10px;
+                min-height: 35px;
+                border: 2px solid #94ffed;
+                border-radius: 8px;
+                background-color: white;
+            }
+            QComboBox:hover {
+                border: 2px solid #00695c;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 30px;
+                border-left: 2px solid #94ffed;
+                border-radius: 0px;
+            }
+            QComboBox QAbstractItemView {
+                font-size: 16px;
+                background-color: white;
+                selection-background-color: #94ffed;
+                selection-color: #00695c;
+                border: 2px solid #94ffed;
+                outline: none;
             }
             QCheckBox {
-                font-size: 14px;
-                margin: 5px;
+                font-size: 18px;
+                margin: 8px;
+                padding: 8px;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 20px;
+                height: 20px;
+            }
+            QGroupBox {
+                font-size: 16px;
+                font-weight: bold;
+                border: 2px solid #94ffed;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
             }
         """)
         
@@ -247,23 +391,43 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.progress_bar.setValue(1)
         main_layout.addWidget(self.progress_bar)
         
-        # Question container with fixed size
-        self.question_container = QtWidgets.QWidget()
+        # Swipeable question container
+        self.question_container = SwipeableWidget()
         self.question_container.setMinimumHeight(350)
+        self.question_container.swipe_left.connect(self.next_step)
+        self.question_container.swipe_right.connect(self.previous_step)
+        
         self.question_layout = QVBoxLayout(self.question_container)
-        self.question_layout.setSpacing(10)
+        self.question_layout.setSpacing(15)
+        self.question_layout.setContentsMargins(15, 15, 15, 15)
         main_layout.addWidget(self.question_container)
         
-        # Navigation buttons - FIXED TO BOTTOM
+        # Visual indicator for swipe (small hint)
+        swipe_hint = QLabel("← Swipe to navigate →")
+        swipe_hint.setStyleSheet("font-size: 12px; color: #666; font-style: italic;")
+        swipe_hint.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(swipe_hint)
+        
+        # Navigation buttons
         nav_widget = QtWidgets.QWidget()
         nav_layout = QHBoxLayout(nav_widget)
         nav_layout.setSpacing(20)
         
         self.back_button = QPushButton("← BACK")
         self.back_button.setStyleSheet("""
-            background-color: #ffd794; 
-            color: #654700;
-            padding: 15px 30px;
+            QPushButton {
+                background-color: #ffd794; 
+                color: #654700;
+                padding: 15px 30px;
+                font-size: 18px;
+                border-radius: 12px;
+            }
+            QPushButton:hover {
+                background-color: #ffe7a8;
+            }
+            QPushButton:pressed {
+                background-color: #dfc080;
+            }
         """)
         self.back_button.clicked.connect(self.previous_step)
         self.back_button.setVisible(False)
@@ -273,9 +437,19 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         
         self.next_button = QPushButton("NEXT →")
         self.next_button.setStyleSheet("""
-            background-color: #94ffed; 
-            color: #00695c;
-            padding: 15px 30px;
+            QPushButton {
+                background-color: #94ffed; 
+                color: #00695c;
+                padding: 15px 30px;
+                font-size: 18px;
+                border-radius: 12px;
+            }
+            QPushButton:hover {
+                background-color: #a8fff0;
+            }
+            QPushButton:pressed {
+                background-color: #80dfd0;
+            }
         """)
         self.next_button.clicked.connect(self.next_step)
         nav_layout.addWidget(self.next_button)
@@ -284,9 +458,19 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         
         self.cancel_button = QPushButton("CANCEL")
         self.cancel_button.setStyleSheet("""
-            background-color: #ff9494; 
-            color: #690000;
-            padding: 15px 30px;
+            QPushButton {
+                background-color: #ff9494; 
+                color: #690000;
+                padding: 15px 30px;
+                font-size: 18px;
+                border-radius: 12px;
+            }
+            QPushButton:hover {
+                background-color: #ffa8a8;
+            }
+            QPushButton:pressed {
+                background-color: #df8080;
+            }
         """)
         self.cancel_button.clicked.connect(self.cancel_assessment)
         nav_layout.addWidget(self.cancel_button)
@@ -295,20 +479,28 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.setLayout(main_layout)
     
     def clear_question_area(self):
-        """Properly clear all widgets from question area"""
-        for widget in self.current_widgets:
-            if widget is not None:
-                widget.deleteLater()
-        self.current_widgets.clear()
-        
-        # Clear layout
+        """Completely clear all widgets from question area"""
+        # Clear the layout properly
         while self.question_layout.count():
             item = self.question_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        
+        # Clear the tracked widgets list
+        self.current_widgets.clear()
+        
+        # Force immediate UI update
+        QApplication.processEvents()
     
     def show_step(self, step):
         """Show a specific step in the wizard"""
+        # Save current step answers before clearing
+        self.save_answers()
+        
+        # Clear everything first - this ensures no text overlap
+        self.clear_question_area()
+        
+        # Update step
         self.current_step = step
         self.progress_bar.setValue(step + 1)
         self.step_label.setText(f"Step {step + 1} of {self.total_steps}")
@@ -320,8 +512,6 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
             self.next_button.setText("CALCULATE RESULTS")
         else:
             self.next_button.setText("NEXT →")
-        
-        self.clear_question_area()
         
         # Show appropriate step content
         if step == 0:
@@ -338,35 +528,71 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
             self.show_patient_info_step()
         elif step == 6:
             self.show_summary_step()
+        
+        # Force UI update
+        QApplication.processEvents()
     
     def show_asymmetry_step(self):
         """Step 1: Asymmetry"""
         self.title_label.setText("A - ASYMMETRY")
         
+        # Add stretch at top to center content vertically
+        self.question_layout.addStretch(1)
+        
         question = QLabel("Is the lesion asymmetrical?")
-        question.setStyleSheet("font-size: 22px; font-weight: bold; color: #00695c;")
+        question.setStyleSheet("font-size: 24px; font-weight: bold; color: #00695c; margin: 10px;")
         question.setAlignment(Qt.AlignCenter)
         self.question_layout.addWidget(question)
         self.current_widgets.append(question)
         
         description = QLabel("Asymmetry means if you draw a line through the middle,\nthe two halves don't match.")
-        description.setStyleSheet("font-size: 14px; font-style: italic; color: #666;")
+        description.setStyleSheet("font-size: 16px; font-style: italic; color: #666; margin: 5px;")
         description.setAlignment(Qt.AlignCenter)
         self.question_layout.addWidget(description)
         self.current_widgets.append(description)
         
-        self.question_layout.addSpacing(30)
+        self.question_layout.addSpacing(20)
         
-        # Options
-        option_group = QtWidgets.QWidget()
+        # Options with larger touch area
+        option_group = QtWidgets.QGroupBox("Select one:")
+        option_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 18px;
+                font-weight: bold;
+                border: 2px solid #94ffed;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 15px;
+                background-color: rgba(255, 255, 255, 0.3);
+            }
+        """)
         option_layout = QVBoxLayout(option_group)
+        option_layout.setSpacing(10)
         
         self.asymmetry_yes = QRadioButton("YES - Asymmetrical")
         self.asymmetry_no = QRadioButton("NO - Symmetrical")
         self.asymmetry_no.setChecked(True)
         
-        self.asymmetry_yes.setStyleSheet("font-size: 16px; padding: 10px;")
-        self.asymmetry_no.setStyleSheet("font-size: 16px; padding: 10px;")
+        for rb in [self.asymmetry_yes, self.asymmetry_no]:
+            rb.setStyleSheet("""
+                QRadioButton {
+                    font-size: 20px;
+                    padding: 12px;
+                    background-color: white;
+                    border: 1px solid #94ffed;
+                    border-radius: 8px;
+                    margin: 2px;
+                }
+                QRadioButton:hover {
+                    background-color: #e8fff8;
+                    border: 2px solid #00695c;
+                }
+                QRadioButton:checked {
+                    background-color: #94ffed;
+                    border: 2px solid #00695c;
+                    font-weight: bold;
+                }
+            """)
         
         option_layout.addWidget(self.asymmetry_yes)
         option_layout.addWidget(self.asymmetry_no)
@@ -375,35 +601,67 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.question_layout.addWidget(option_group)
         self.current_widgets.extend([option_group, self.asymmetry_yes, self.asymmetry_no])
         
-        self.question_layout.addStretch(1)
+        self.question_layout.addStretch(2)
     
     def show_border_step(self):
         """Step 2: Border"""
         self.title_label.setText("B - BORDER")
         
+        self.question_layout.addStretch(1)
+        
         question = QLabel("Is the border irregular, ragged, or notched?")
-        question.setStyleSheet("font-size: 22px; font-weight: bold; color: #00695c;")
+        question.setStyleSheet("font-size: 24px; font-weight: bold; color: #00695c; margin: 10px;")
         question.setAlignment(Qt.AlignCenter)
         self.question_layout.addWidget(question)
         self.current_widgets.append(question)
         
         description = QLabel("Irregular borders look like a coastline with bays,\nnot a smooth, round circle.")
-        description.setStyleSheet("font-size: 14px; font-style: italic; color: #666;")
+        description.setStyleSheet("font-size: 16px; font-style: italic; color: #666; margin: 5px;")
         description.setAlignment(Qt.AlignCenter)
         self.question_layout.addWidget(description)
         self.current_widgets.append(description)
         
-        self.question_layout.addSpacing(30)
+        self.question_layout.addSpacing(20)
         
-        option_group = QtWidgets.QWidget()
+        option_group = QtWidgets.QGroupBox("Select one:")
+        option_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 18px;
+                font-weight: bold;
+                border: 2px solid #94ffed;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 15px;
+                background-color: rgba(255, 255, 255, 0.3);
+            }
+        """)
         option_layout = QVBoxLayout(option_group)
+        option_layout.setSpacing(10)
         
         self.border_yes = QRadioButton("YES - Irregular border")
         self.border_no = QRadioButton("NO - Smooth border")
         self.border_no.setChecked(True)
         
-        self.border_yes.setStyleSheet("font-size: 16px; padding: 10px;")
-        self.border_no.setStyleSheet("font-size: 16px; padding: 10px;")
+        for rb in [self.border_yes, self.border_no]:
+            rb.setStyleSheet("""
+                QRadioButton {
+                    font-size: 20px;
+                    padding: 12px;
+                    background-color: white;
+                    border: 1px solid #94ffed;
+                    border-radius: 8px;
+                    margin: 2px;
+                }
+                QRadioButton:hover {
+                    background-color: #e8fff8;
+                    border: 2px solid #00695c;
+                }
+                QRadioButton:checked {
+                    background-color: #94ffed;
+                    border: 2px solid #00695c;
+                    font-weight: bold;
+                }
+            """)
         
         option_layout.addWidget(self.border_yes)
         option_layout.addWidget(self.border_no)
@@ -412,28 +670,42 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.question_layout.addWidget(option_group)
         self.current_widgets.extend([option_group, self.border_yes, self.border_no])
         
-        self.question_layout.addStretch(1)
+        self.question_layout.addStretch(2)
     
     def show_color_step(self):
         """Step 3: Color"""
         self.title_label.setText("C - COLOR")
         
+        self.question_layout.addStretch(1)
+        
         question = QLabel("How many colors does the lesion have?")
-        question.setStyleSheet("font-size: 22px; font-weight: bold; color: #00695c;")
+        question.setStyleSheet("font-size: 24px; font-weight: bold; color: #00695c; margin: 10px;")
         question.setAlignment(Qt.AlignCenter)
         self.question_layout.addWidget(question)
         self.current_widgets.append(question)
         
         description = QLabel("More colors = higher risk. Look for shades of brown, black, red, white, or blue.")
-        description.setStyleSheet("font-size: 14px; font-style: italic; color: #666;")
+        description.setStyleSheet("font-size: 16px; font-style: italic; color: #666; margin: 5px;")
         description.setAlignment(Qt.AlignCenter)
         self.question_layout.addWidget(description)
         self.current_widgets.append(description)
         
-        self.question_layout.addSpacing(30)
+        self.question_layout.addSpacing(20)
         
-        option_group = QtWidgets.QWidget()
+        option_group = QtWidgets.QGroupBox("Select one:")
+        option_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 18px;
+                font-weight: bold;
+                border: 2px solid #94ffed;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 15px;
+                background-color: rgba(255, 255, 255, 0.3);
+            }
+        """)
         option_layout = QVBoxLayout(option_group)
+        option_layout.setSpacing(10)
         
         self.color_single = QRadioButton("Single color (brown, tan, or black)")
         self.color_two = QRadioButton("2-3 colors")
@@ -441,7 +713,25 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.color_single.setChecked(True)
         
         for rb in [self.color_single, self.color_two, self.color_many]:
-            rb.setStyleSheet("font-size: 16px; padding: 10px;")
+            rb.setStyleSheet("""
+                QRadioButton {
+                    font-size: 20px;
+                    padding: 12px;
+                    background-color: white;
+                    border: 1px solid #94ffed;
+                    border-radius: 8px;
+                    margin: 2px;
+                }
+                QRadioButton:hover {
+                    background-color: #e8fff8;
+                    border: 2px solid #00695c;
+                }
+                QRadioButton:checked {
+                    background-color: #94ffed;
+                    border: 2px solid #00695c;
+                    font-weight: bold;
+                }
+            """)
         
         option_layout.addWidget(self.color_single)
         option_layout.addWidget(self.color_two)
@@ -451,28 +741,42 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.question_layout.addWidget(option_group)
         self.current_widgets.extend([option_group, self.color_single, self.color_two, self.color_many])
         
-        self.question_layout.addStretch(1)
+        self.question_layout.addStretch(2)
     
     def show_diameter_step(self):
         """Step 4: Diameter"""
         self.title_label.setText("D - DIAMETER")
         
+        self.question_layout.addStretch(1)
+        
         question = QLabel("What is the size of the lesion?")
-        question.setStyleSheet("font-size: 22px; font-weight: bold; color: #00695c;")
+        question.setStyleSheet("font-size: 24px; font-weight: bold; color: #00695c; margin: 10px;")
         question.setAlignment(Qt.AlignCenter)
         self.question_layout.addWidget(question)
         self.current_widgets.append(question)
         
         description = QLabel("Measure the widest part. A pencil eraser is about 6mm.")
-        description.setStyleSheet("font-size: 14px; font-style: italic; color: #666;")
+        description.setStyleSheet("font-size: 16px; font-style: italic; color: #666; margin: 5px;")
         description.setAlignment(Qt.AlignCenter)
         self.question_layout.addWidget(description)
         self.current_widgets.append(description)
         
-        self.question_layout.addSpacing(30)
+        self.question_layout.addSpacing(20)
         
-        option_group = QtWidgets.QWidget()
+        option_group = QtWidgets.QGroupBox("Select one:")
+        option_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 18px;
+                font-weight: bold;
+                border: 2px solid #94ffed;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 15px;
+                background-color: rgba(255, 255, 255, 0.3);
+            }
+        """)
         option_layout = QVBoxLayout(option_group)
+        option_layout.setSpacing(10)
         
         self.diameter_small = QRadioButton("Small (less than 6mm)")
         self.diameter_medium = QRadioButton("Medium (6-10mm)")
@@ -480,7 +784,25 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.diameter_small.setChecked(True)
         
         for rb in [self.diameter_small, self.diameter_medium, self.diameter_large]:
-            rb.setStyleSheet("font-size: 16px; padding: 10px;")
+            rb.setStyleSheet("""
+                QRadioButton {
+                    font-size: 20px;
+                    padding: 12px;
+                    background-color: white;
+                    border: 1px solid #94ffed;
+                    border-radius: 8px;
+                    margin: 2px;
+                }
+                QRadioButton:hover {
+                    background-color: #e8fff8;
+                    border: 2px solid #00695c;
+                }
+                QRadioButton:checked {
+                    background-color: #94ffed;
+                    border: 2px solid #00695c;
+                    font-weight: bold;
+                }
+            """)
         
         option_layout.addWidget(self.diameter_small)
         option_layout.addWidget(self.diameter_medium)
@@ -490,28 +812,42 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.question_layout.addWidget(option_group)
         self.current_widgets.extend([option_group, self.diameter_small, self.diameter_medium, self.diameter_large])
         
-        self.question_layout.addStretch(1)
+        self.question_layout.addStretch(2)
     
     def show_evolution_step(self):
         """Step 5: Evolution"""
         self.title_label.setText("E - EVOLUTION")
         
+        self.question_layout.addStretch(1)
+        
         question = QLabel("Has the lesion changed over time?")
-        question.setStyleSheet("font-size: 22px; font-weight: bold; color: #00695c;")
+        question.setStyleSheet("font-size: 24px; font-weight: bold; color: #00695c; margin: 10px;")
         question.setAlignment(Qt.AlignCenter)
         self.question_layout.addWidget(question)
         self.current_widgets.append(question)
         
         description = QLabel("Recent changes in size, shape, or color are a major warning sign!")
-        description.setStyleSheet("font-size: 14px; font-style: italic; color: #d32f2f; font-weight: bold;")
+        description.setStyleSheet("font-size: 16px; font-style: italic; color: #d32f2f; font-weight: bold; margin: 5px;")
         description.setAlignment(Qt.AlignCenter)
         self.question_layout.addWidget(description)
         self.current_widgets.append(description)
         
-        self.question_layout.addSpacing(30)
+        self.question_layout.addSpacing(20)
         
-        option_group = QtWidgets.QWidget()
+        option_group = QtWidgets.QGroupBox("Select one:")
+        option_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 18px;
+                font-weight: bold;
+                border: 2px solid #94ffed;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 15px;
+                background-color: rgba(255, 255, 255, 0.3);
+            }
+        """)
         option_layout = QVBoxLayout(option_group)
+        option_layout.setSpacing(10)
         
         self.evolution_no = QRadioButton("NO CHANGE - Stable for years")
         self.evolution_slow = QRadioButton("SLOW CHANGE - Over months/years")
@@ -519,7 +855,25 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.evolution_no.setChecked(True)
         
         for rb in [self.evolution_no, self.evolution_slow, self.evolution_fast]:
-            rb.setStyleSheet("font-size: 16px; padding: 10px;")
+            rb.setStyleSheet("""
+                QRadioButton {
+                    font-size: 20px;
+                    padding: 12px;
+                    background-color: white;
+                    border: 1px solid #94ffed;
+                    border-radius: 8px;
+                    margin: 2px;
+                }
+                QRadioButton:hover {
+                    background-color: #e8fff8;
+                    border: 2px solid #00695c;
+                }
+                QRadioButton:checked {
+                    background-color: #94ffed;
+                    border: 2px solid #00695c;
+                    font-weight: bold;
+                }
+            """)
         
         option_layout.addWidget(self.evolution_no)
         option_layout.addWidget(self.evolution_slow)
@@ -529,77 +883,201 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.question_layout.addWidget(option_group)
         self.current_widgets.extend([option_group, self.evolution_no, self.evolution_slow, self.evolution_fast])
         
-        self.question_layout.addStretch(1)
+        self.question_layout.addStretch(2)
     
     def show_patient_info_step(self):
         """Step 6: Patient Information"""
         self.title_label.setText("PATIENT INFORMATION")
         
+        self.question_layout.addStretch(1)
+        
         question = QLabel("Tell us about the patient")
-        question.setStyleSheet("font-size: 22px; font-weight: bold; color: #00695c;")
+        question.setStyleSheet("font-size: 24px; font-weight: bold; color: #00695c; margin: 10px;")
         question.setAlignment(Qt.AlignCenter)
         self.question_layout.addWidget(question)
         self.current_widgets.append(question)
         
-        self.question_layout.addSpacing(20)
+        self.question_layout.addSpacing(10)
         
-        # Age
-        age_widget = QtWidgets.QWidget()
-        age_layout = QHBoxLayout(age_widget)
-        age_label = QLabel("Age:")
-        age_label.setStyleSheet("font-size: 18px;")
+        # Create a scroll area for patient info to ensure all content is accessible
+        info_scroll = QScrollArea()
+        info_scroll.setWidgetResizable(True)
+        info_scroll.setStyleSheet("""
+            QScrollArea {
+                border: 2px solid #94ffed;
+                border-radius: 10px;
+                background-color: rgba(255, 255, 255, 0.3);
+            }
+        """)
+        
+        info_widget = QtWidgets.QWidget()
+        info_layout = QVBoxLayout(info_widget)
+        info_layout.setSpacing(15)
+        info_layout.setContentsMargins(15, 15, 15, 15)
+        
+        # Age with larger touch area
+        age_group = QtWidgets.QGroupBox("Age")
+        age_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 18px;
+                font-weight: bold;
+                border: 2px solid #94ffed;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 15px;
+                background-color: white;
+            }
+        """)
+        age_layout = QHBoxLayout(age_group)
+        age_layout.setSpacing(20)
+        
+        age_label = QLabel("Patient age:")
+        age_label.setStyleSheet("font-size: 18px; padding: 5px;")
+        
         self.age_spinbox = QSpinBox()
-        self.age_spinbox.setRange(1, 100)
+        self.age_spinbox.setRange(1, 120)
         self.age_spinbox.setValue(40)
-        self.age_spinbox.setStyleSheet("font-size: 18px; padding: 8px;")
+        self.age_spinbox.setStyleSheet("""
+            QSpinBox {
+                font-size: 20px;
+                padding: 10px;
+                min-height: 40px;
+                border: 2px solid #94ffed;
+                border-radius: 8px;
+                background-color: white;
+            }
+            QSpinBox:hover {
+                border: 2px solid #00695c;
+            }
+            QSpinBox::up-button, QSpinBox::down-button {
+                width: 30px;
+                height: 20px;
+            }
+        """)
+        
         age_layout.addWidget(age_label)
         age_layout.addWidget(self.age_spinbox)
         age_layout.addStretch(1)
-        self.question_layout.addWidget(age_widget)
-        self.current_widgets.extend([age_widget, age_label, self.age_spinbox])
+        info_layout.addWidget(age_group)
         
-        self.question_layout.addSpacing(20)
+        # Skin Type with properly formatted dropdown
+        skin_group = QtWidgets.QGroupBox("Skin Type (Fitzpatrick Scale)")
+        skin_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 18px;
+                font-weight: bold;
+                border: 2px solid #94ffed;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 15px;
+                background-color: white;
+            }
+        """)
+        skin_layout = QVBoxLayout(skin_group)
         
-        # Skin Type
-        skin_widget = QtWidgets.QWidget()
-        skin_layout = QVBoxLayout(skin_widget)
-        skin_label = QLabel("Skin Type (Fitzpatrick):")
-        skin_label.setStyleSheet("font-size: 18px;")
-        skin_layout.addWidget(skin_label)
+        skin_description = QLabel("Select the skin type that best matches:")
+        skin_description.setStyleSheet("font-size: 16px; color: #666; margin: 5px;")
+        skin_description.setWordWrap(True)
+        skin_layout.addWidget(skin_description)
         
         self.skin_combo = QComboBox()
         self.skin_combo.addItems([
-            "I - Always burns, never tans (pale)",
-            "II - Usually burns, tans minimally", 
-            "III - Sometimes burns, tans gradually",
-            "IV - Rarely burns, tans well",
-            "V - Brown skin, rarely burns",
-            "VI - Black skin, never burns"
+            "Type I - Always burns, never tans (very fair skin, red/blonde hair)",
+            "Type II - Usually burns, tans minimally (fair skin, light eyes)",
+            "Type III - Sometimes burns, tans gradually (fair to beige skin)",
+            "Type IV - Rarely burns, tans well (olive or light brown skin)",
+            "Type V - Very rarely burns, tans easily (brown skin)",
+            "Type VI - Never burns (deeply pigmented dark brown to black skin)"
         ])
         self.skin_combo.setCurrentIndex(2)
-        self.skin_combo.setStyleSheet("font-size: 16px; padding: 8px;")
+        self.skin_combo.setStyleSheet("""
+            QComboBox {
+                font-size: 16px;
+                padding: 12px;
+                min-height: 45px;
+                border: 2px solid #94ffed;
+                border-radius: 8px;
+                background-color: white;
+            }
+            QComboBox:hover {
+                border: 2px solid #00695c;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 40px;
+                border-left: 2px solid #94ffed;
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }
+            QComboBox::down-arrow {
+                width: 20px;
+                height: 20px;
+            }
+            QComboBox QAbstractItemView {
+                font-size: 16px;
+                background-color: white;
+                selection-background-color: #94ffed;
+                selection-color: #00695c;
+                border: 2px solid #94ffed;
+                outline: none;
+                min-height: 40px;
+            }
+        """)
         skin_layout.addWidget(self.skin_combo)
-        self.question_layout.addWidget(skin_widget)
-        self.current_widgets.extend([skin_widget, skin_label, self.skin_combo])
+        info_layout.addWidget(skin_group)
         
-        self.question_layout.addSpacing(20)
-        
-        # Checkboxes
-        checkbox_widget = QtWidgets.QWidget()
-        checkbox_layout = QVBoxLayout(checkbox_widget)
+        # Risk factors with larger checkboxes
+        risk_group = QtWidgets.QGroupBox("Risk Factors")
+        risk_group.setStyleSheet("""
+            QGroupBox {
+                font-size: 18px;
+                font-weight: bold;
+                border: 2px solid #94ffed;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 15px;
+                background-color: white;
+            }
+        """)
+        risk_layout = QVBoxLayout(risk_group)
         
         self.family_check = QCheckBox("Family history of skin cancer")
-        self.family_check.setStyleSheet("font-size: 16px;")
-        
         self.sunburn_check = QCheckBox("History of severe sunburns")
-        self.sunburn_check.setStyleSheet("font-size: 16px;")
         
-        checkbox_layout.addWidget(self.family_check)
-        checkbox_layout.addWidget(self.sunburn_check)
-        checkbox_layout.addStretch(1)
+        for cb in [self.family_check, self.sunburn_check]:
+            cb.setStyleSheet("""
+                QCheckBox {
+                    font-size: 18px;
+                    padding: 12px;
+                    background-color: white;
+                    border: 1px solid #94ffed;
+                    border-radius: 8px;
+                    margin: 2px;
+                }
+                QCheckBox:hover {
+                    background-color: #e8fff8;
+                    border: 2px solid #00695c;
+                }
+                QCheckBox:checked {
+                    background-color: #94ffed;
+                    border: 2px solid #00695c;
+                }
+                QCheckBox::indicator {
+                    width: 24px;
+                    height: 24px;
+                }
+            """)
         
-        self.question_layout.addWidget(checkbox_widget)
-        self.current_widgets.extend([checkbox_widget, self.family_check, self.sunburn_check])
+        risk_layout.addWidget(self.family_check)
+        risk_layout.addWidget(self.sunburn_check)
+        risk_layout.addStretch(1)
+        info_layout.addWidget(risk_group)
+        
+        info_scroll.setWidget(info_widget)
+        self.question_layout.addWidget(info_scroll)
+        self.current_widgets.extend([info_scroll, info_widget, age_group, skin_group, risk_group,
+                                     self.age_spinbox, self.skin_combo, self.family_check, self.sunburn_check])
         
         self.question_layout.addStretch(1)
     
@@ -610,15 +1088,17 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         # Save answers
         self.save_answers()
         
+        self.question_layout.addStretch(1)
+        
         summary_text = QLabel("Review your answers:")
-        summary_text.setStyleSheet("font-size: 22px; font-weight: bold; color: #00695c;")
+        summary_text.setStyleSheet("font-size: 24px; font-weight: bold; color: #00695c; margin: 10px;")
         summary_text.setAlignment(Qt.AlignCenter)
         self.question_layout.addWidget(summary_text)
         self.current_widgets.append(summary_text)
         
-        self.question_layout.addSpacing(20)
+        self.question_layout.addSpacing(10)
         
-        # Display summary
+        # Display summary in a scrollable text area
         summary_display = QTextEdit()
         summary_display.setReadOnly(True)
         summary_display.setStyleSheet("""
@@ -642,7 +1122,16 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         
         summary_html += "<h3 style='color: #00695c; margin-top: 20px;'>Patient Information:</h3>"
         summary_html += f"<p><b>Age:</b> {self.patient_data['age']}</p>"
-        skin_types = ["I", "II", "III", "IV", "V", "VI"]
+        
+        # Get the full skin type text
+        skin_types = [
+            "Type I - Always burns, never tans (very fair skin, red/blonde hair)",
+            "Type II - Usually burns, tans minimally (fair skin, light eyes)",
+            "Type III - Sometimes burns, tans gradually (fair to beige skin)",
+            "Type IV - Rarely burns, tans well (olive or light brown skin)",
+            "Type V - Very rarely burns, tans easily (brown skin)",
+            "Type VI - Never burns (deeply pigmented dark brown to black skin)"
+        ]
         summary_html += f"<p><b>Skin Type:</b> {skin_types[self.patient_data['skin_type']]}</p>"
         summary_html += f"<p><b>Family History:</b> {'YES' if self.patient_data['family_history'] else 'NO'}</p>"
         summary_html += f"<p><b>Sunburn History:</b> {'YES' if self.patient_data['sunburn_history'] else 'NO'}</p>"
@@ -652,12 +1141,12 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.current_widgets.append(summary_display)
         
         note = QLabel("Click 'CALCULATE RESULTS' to generate your comprehensive risk assessment.")
-        note.setStyleSheet("font-size: 14px; font-style: italic; color: #666; margin-top: 10px;")
+        note.setStyleSheet("font-size: 16px; font-style: italic; color: #666; margin-top: 10px;")
         note.setAlignment(Qt.AlignCenter)
         self.question_layout.addWidget(note)
         self.current_widgets.append(note)
         
-        self.question_layout.addStretch(1)
+        self.question_layout.addStretch(2)
     
     def save_answers(self):
         """Save answers from current step"""
@@ -695,8 +1184,6 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
     def previous_step(self):
         """Go to previous step"""
         if self.current_step > 0:
-            # Save current answers before moving
-            self.save_answers()
             self.show_step(self.current_step - 1)
     
     def next_step(self):
@@ -837,15 +1324,17 @@ class CameraThread(QThread):
             print("Starting camera...")
             self.picam2 = Picamera2()
             
-            # Try different configurations
+            # CRITICAL: Explicitly request RGB888 format for correct colors
             try:
                 config = self.picam2.create_preview_configuration(
                     main={"size": (640, 480), "format": "RGB888"},
                     controls={"FrameRate": 30}
                 )
                 self.picam2.configure(config)
+                print("Camera configured with RGB888 format")
             except:
-                # Fallback to simple config
+                # Fallback to simple config but still try to get RGB
+                print("Falling back to simple configuration")
                 config = self.picam2.create_preview_configuration(
                     main={"size": (640, 480)}
                 )
@@ -863,8 +1352,18 @@ class CameraThread(QThread):
                             frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
                         elif frame.shape[2] == 4:  # RGBA
                             frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
-                        elif frame.shape[2] == 1:  # Single channel
-                            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+                        elif frame.shape[2] == 3:
+                            # Check if the frame might be in BGR format
+                            # Sample the center pixel to detect color order
+                            h, w, _ = frame.shape
+                            sample_y, sample_x = h // 2, w // 2
+                            sample = frame[sample_y, sample_x]
+                            
+                            # If blue channel is significantly higher than red, probably BGR
+                            # Typical skin has red > blue, so if blue > red + 30, it's likely BGR
+                            if sample[2] > sample[0] + 30:  # Blue > Red by threshold
+                                print("Detected BGR format, converting to RGB")
+                                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         
                         self.latest_frame = frame.copy()
                         h, w, ch = frame.shape
@@ -908,6 +1407,8 @@ class NomaAIApp(QMainWindow):
         # Blinking control
         self.blink_timer = None
         self.blink_state = False
+        self.blink_count = 0
+        self.max_blinks = 20  # 10 seconds at 500ms interval (on/off = 1 second per blink cycle)
         
         # Classes
         self.classes = [
@@ -1266,15 +1767,21 @@ class NomaAIApp(QMainWindow):
     
     # LED Methods
     def start_yellow_blinking_for_dialog(self):
-        """Start yellow LED blinking using a timer"""
+        """Start yellow LED blinking using a timer (max 10 seconds)"""
         self.stop_yellow_blinking()
         self.blink_state = False
+        self.blink_count = 0
         self.blink_timer = QTimer()
         self.blink_timer.timeout.connect(self._blink_yellow)
         self.blink_timer.start(500)  # 500 ms interval
     
     def _blink_yellow(self):
-        """Toggle yellow LED"""
+        """Toggle yellow LED with max 10 second limit"""
+        self.blink_count += 1
+        if self.blink_count > self.max_blinks:  # Stop after max_blinks (20 = 10 seconds)
+            self.stop_yellow_blinking()
+            return
+        
         self.blink_state = not self.blink_state
         set_leds(yellow=self.blink_state)
     
@@ -1284,6 +1791,7 @@ class NomaAIApp(QMainWindow):
             self.blink_timer.stop()
             self.blink_timer = None
         set_leds(yellow=False)
+        self.blink_count = 0
     
     def show_green_completion_pattern(self):
         """Show green completion pattern"""
@@ -1430,10 +1938,13 @@ class NomaAIApp(QMainWindow):
         self.camera_thread.start()
     
     def update_camera_feed(self, qt_image):
+        """Update camera feed with correct colors"""
         pixmap = QtGui.QPixmap.fromImage(qt_image).scaled(
             400, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
         self.image_label.setPixmap(pixmap)
+        # Force immediate UI update
+        self.image_label.repaint()
     
     # Model
     def load_model(self):
