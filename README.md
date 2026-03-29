@@ -6,7 +6,7 @@ NOMA AI is a portable, AI-powered skin cancer screening system that fuses comput
 
 - Raspberry Pi 4 (4 GB RAM): Real-time AI inference and system control
 
-- Arducam 12 MP IMX519: High-resolution autofocus imaging for lesion detail capture
+- Arducam 16 MP IMX519: High-resolution autofocus imaging for lesion detail capture
 
 - Waveshare 5” Touchscreen: Live camera feed and interactive GUI
 
