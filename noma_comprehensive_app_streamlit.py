@@ -224,7 +224,8 @@ def authentication_ui():
                 username = st.text_input("Username", placeholder="Enter your username")
                 password = st.text_input("Password", type="password", placeholder="Enter your password")
                 
-                submit = st.form_submit_button("Login", use_container_width=True, type="primary")
+                # Fixed: Replaced use_container_width with width parameter
+                submit = st.form_submit_button("Login", width="stretch", type="primary")
                 
                 if submit:
                     if not username or not password:
@@ -261,7 +262,8 @@ def authentication_ui():
                 
                 terms = st.checkbox("I agree to the Terms and Conditions*")
                 
-                submitted = st.form_submit_button("Register", use_container_width=True, type="primary")
+                # Fixed: Replaced use_container_width with width parameter
+                submitted = st.form_submit_button("Register", width="stretch", type="primary")
                 
                 if submitted:
                     # Validation
@@ -331,6 +333,10 @@ def load_ai_model():
         # Use your specific model name
         model = load_model('noma_cancer_ai_model.keras')
         
+        # Get the input shape and expected input layer name
+        input_layer = model.input
+        expected_input_name = input_layer.name if hasattr(input_layer, 'name') else 'input_layer'
+        
         # Get the last convolutional layer for Grad-CAM
         last_conv_layer_name = None
         
@@ -343,13 +349,16 @@ def load_ai_model():
         if last_conv_layer_name is None:
             # Fallback to a common naming pattern
             last_conv_layer_name = 'Conv_1'  # Adjust this based on your model
-            
-        return model, last_conv_layer_name
+        
+        # Print model summary for debugging
+        model.summary()
+        
+        return model, last_conv_layer_name, expected_input_name
     except Exception as e:
         st.warning(f"Model not found or error loading: {e}. Running in demo mode with simulated predictions.")
-        return None, None
+        return None, None, None
 
-model, last_conv_layer = load_ai_model()
+model, last_conv_layer, expected_input_name = load_ai_model()
 
 # Define classes (update this list to match your model's classes)
 classes = [
@@ -368,7 +377,7 @@ normal_classes = ["Normal"]
 # ==================== GRAD-CAM IMPLEMENTATION ====================
 
 def make_gradcam_heatmap(img_array, model, last_conv_layer_name, pred_index=None):
-    """Generate Grad-CAM heatmap"""
+    """Generate Grad-CAM heatmap with proper input handling"""
     try:
         # Get the last convolutional layer
         last_conv_layer = model.get_layer(last_conv_layer_name)
@@ -602,17 +611,20 @@ def clinical_assessment_wizard():
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
         if st.session_state.wizard_step > 0:
-            if st.button("← Previous", use_container_width=True):
+            # Fixed: Replaced use_container_width with width parameter
+            if st.button("← Previous", width="stretch"):
                 st.session_state.wizard_step -= 1
                 st.rerun()
     
     with col3:
         if st.session_state.wizard_step < total_steps - 1:
-            if st.button("Next →", use_container_width=True):
+            # Fixed: Replaced use_container_width with width parameter
+            if st.button("Next →", width="stretch"):
                 st.session_state.wizard_step += 1
                 st.rerun()
         else:
-            if st.button("Calculate Results", use_container_width=True, type="primary"):
+            # Fixed: Replaced use_container_width with width parameter
+            if st.button("Calculate Results", width="stretch", type="primary"):
                 return calculate_risk_score()
     
     return None
@@ -702,6 +714,30 @@ def calculate_risk_score():
 
 # ==================== IMAGE ANALYSIS WITH GRAD-CAM ====================
 
+def preprocess_image_for_model(image, target_size=(224, 224)):
+    """Preprocess image for model input with proper formatting"""
+    try:
+        # Resize image
+        img = image.resize(target_size)
+        
+        # Convert to numpy array and normalize
+        img_array = np.array(img) / 255.0
+        
+        # Ensure RGB format
+        if len(img_array.shape) == 2:
+            img_array = np.stack([img_array] * 3, axis=-1)
+        elif img_array.shape[-1] == 4:
+            img_array = img_array[:, :, :3]
+        
+        # Add batch dimension
+        img_array = np.expand_dims(img_array, axis=0).astype(np.float32)
+        
+        return img_array
+    
+    except Exception as e:
+        st.error(f"Image preprocessing error: {e}")
+        return None
+
 def analyze_image(image, clinical_risk):
     """Analyze skin image with AI model and generate Grad-CAM"""
     
@@ -713,28 +749,40 @@ def analyze_image(image, clinical_risk):
     else:
         try:
             # Preprocess image for the model
-            img = image.resize((224, 224))
-            img_array = np.array(img) / 255.0
-            img_array = np.expand_dims(img_array, axis=0).astype(np.float32)
+            img_array = preprocess_image_for_model(image)
+            
+            if img_array is None:
+                raise ValueError("Failed to preprocess image")
+            
+            # Print input shape for debugging
+            st.write(f"Input tensor shape: {img_array.shape}")
+            st.write(f"Model expects: {model.input_shape if hasattr(model, 'input_shape') else 'unknown'}")
             
             # Make prediction
             predictions = model.predict(img_array, verbose=0)
             class_idx = np.argmax(predictions[0])
             confidence = float(predictions[0][class_idx])
-            pred_class = classes[class_idx] if class_idx < len(classes) else f"Class_{class_idx}"
+            
+            # Ensure class index is within bounds
+            if class_idx >= len(classes):
+                st.warning(f"Model output index {class_idx} exceeds class list size {len(classes)}")
+                class_idx = 0
+            
+            pred_class = classes[class_idx]
             
             # Generate Grad-CAM heatmap
             if last_conv_layer:
                 heatmap = make_gradcam_heatmap(img_array, model, last_conv_layer, class_idx)
                 if heatmap is not None:
-                    heatmap_img = overlay_heatmap(heatmap, img)
+                    heatmap_img = overlay_heatmap(heatmap, image)
                 else:
                     heatmap_img = None
             else:
                 heatmap_img = None
                 
         except Exception as e:
-            st.error(f"Model inference error: {e}")
+            st.error(f"Model inference error: {str(e)}")
+            st.exception(e)  # This will show the full error traceback
             pred_class = "Error in analysis"
             confidence = 0.0
             heatmap_img = None
@@ -840,7 +888,7 @@ def tracking_dashboard():
             """, unsafe_allow_html=True)
     
     # Export data
-    if st.button("📥 Export Patient Data", use_container_width=True):
+    if st.button("📥 Export Patient Data", width="stretch"):
         csv = df.to_csv(index=False)
         st.download_button(
             label="Download CSV",
@@ -875,7 +923,7 @@ def main():
         user_profile_ui()
         
         # Logout button
-        if st.button("🚪 Logout", use_container_width=True):
+        if st.button("🚪 Logout", width="stretch"):
             logout()
         
         st.markdown("---")
@@ -932,7 +980,7 @@ def main():
             # Store in session
             st.session_state['clinical_complete'] = True
             
-            if st.button("Proceed to Image Analysis →", use_container_width=True):
+            if st.button("Proceed to Image Analysis →", width="stretch"):
                 st.session_state['nav_to_image'] = True
                 st.rerun()
     
@@ -941,7 +989,7 @@ def main():
         
         if 'clinical_risk' not in st.session_state:
             st.warning("Please complete clinical assessment first")
-            if st.button("Go to Clinical Assessment", use_container_width=True):
+            if st.button("Go to Clinical Assessment", width="stretch"):
                 st.session_state['nav_to_clinical'] = True
                 st.rerun()
         else:
@@ -968,7 +1016,7 @@ def main():
                         image = Image.open(camera_image)
                 
                 if 'image' in locals():
-                    if st.button("🔬 Analyze Image with Grad-CAM", use_container_width=True, type="primary"):
+                    if st.button("🔬 Analyze Image with Grad-CAM", width="stretch", type="primary"):
                         with st.spinner("Analyzing image with AI and generating Grad-CAM..."):
                             # Analyze image with Grad-CAM
                             ai_results = analyze_image(image, st.session_state['clinical_risk'])
@@ -1048,10 +1096,10 @@ def main():
                     # Action buttons
                     col_a, col_b = st.columns(2)
                     with col_a:
-                        if st.button("📋 Save to Record", use_container_width=True):
+                        if st.button("📋 Save to Record", width="stretch"):
                             st.success("Assessment saved to patient record!")
                     with col_b:
-                        if st.button("🔄 New Assessment", use_container_width=True):
+                        if st.button("🔄 New Assessment", width="stretch"):
                             for key in ['clinical_risk', 'ai_results', 'clinical_complete']:
                                 if key in st.session_state:
                                     del st.session_state[key]
