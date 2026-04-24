@@ -224,8 +224,7 @@ def authentication_ui():
                 username = st.text_input("Username", placeholder="Enter your username")
                 password = st.text_input("Password", type="password", placeholder="Enter your password")
                 
-                # Fixed: Replaced use_container_width with width parameter
-                submit = st.form_submit_button("Login", width="stretch", type="primary")
+                submit = st.form_submit_button("Login", use_container_width=True, type="primary")
                 
                 if submit:
                     if not username or not password:
@@ -262,8 +261,7 @@ def authentication_ui():
                 
                 terms = st.checkbox("I agree to the Terms and Conditions*")
                 
-                # Fixed: Replaced use_container_width with width parameter
-                submitted = st.form_submit_button("Register", width="stretch", type="primary")
+                submitted = st.form_submit_button("Register", use_container_width=True, type="primary")
                 
                 if submitted:
                     # Validation
@@ -333,32 +331,60 @@ def load_ai_model():
         # Use your specific model name
         model = load_model('noma_cancer_ai_model.keras')
         
-        # Get the input shape and expected input layer name
-        input_layer = model.input
-        expected_input_name = input_layer.name if hasattr(input_layer, 'name') else 'input_layer'
-        
         # Get the last convolutional layer for Grad-CAM
         last_conv_layer_name = None
         
-        # Try to find the last conv layer automatically
+        # For MobileNetV3Small, look for the last conv layer in the backbone
         for layer in reversed(model.layers):
-            if 'conv' in layer.name.lower() or 'pool' in layer.name.lower():
-                last_conv_layer_name = layer.name
-                break
+            # MobileNetV3Small's convolutional layers are within the functional API
+            if 'conv' in layer.name.lower() or 'expand' in layer.name.lower() or 'project' in layer.name.lower():
+                if hasattr(layer, 'layers'):  # It's a nested model
+                    # Find the deepest conv layer within MobileNetV3Small
+                    for sublayer in reversed(layer.layers):
+                        if 'conv' in sublayer.name.lower():
+                            last_conv_layer_name = sublayer.name
+                            break
+                elif 'conv' in layer.name.lower():
+                    last_conv_layer_name = layer.name
+                    break
+        
+        # Fallback: get the layer before the global average pooling
+        if last_conv_layer_name is None:
+            for i, layer in enumerate(model.layers):
+                if 'global_average_pooling2d' in layer.name.lower():
+                    # Get the previous layer
+                    last_conv_layer_name = model.layers[i-1].name
+                    break
+        
+        # Another fallback for MobileNetV3
+        if last_conv_layer_name is None:
+            # MobileNetV3Small typically has its last conv layer named something like this
+            for layer in model.layers:
+                if hasattr(layer, 'layers'):
+                    for sublayer in layer.layers:
+                        if hasattr(sublayer, 'layers'):
+                            for deep_layer in sublayer.layers:
+                                if 'conv' in deep_layer.name.lower() and 'final' in deep_layer.name.lower():
+                                    last_conv_layer_name = deep_layer.name
+                                    break
         
         if last_conv_layer_name is None:
-            # Fallback to a common naming pattern
-            last_conv_layer_name = 'Conv_1'  # Adjust this based on your model
+            # Final fallback - try to get any conv layer from the MobileNetV3Small
+            for layer in model.layers:
+                if 'mobilenetv3small' in layer.name.lower() and hasattr(layer, 'layers'):
+                    for sublayer in layer.layers:
+                        if 'conv' in sublayer.name.lower():
+                            last_conv_layer_name = sublayer.name
+                            break
+            
+        st.success(f"✅ Model loaded successfully! Using layer: {last_conv_layer_name}")
+        return model, last_conv_layer_name
         
-        # Print model summary for debugging
-        model.summary()
-        
-        return model, last_conv_layer_name, expected_input_name
     except Exception as e:
         st.warning(f"Model not found or error loading: {e}. Running in demo mode with simulated predictions.")
-        return None, None, None
+        return None, None
 
-model, last_conv_layer, expected_input_name = load_ai_model()
+model, last_conv_layer = load_ai_model()
 
 # Define classes (update this list to match your model's classes)
 classes = [
@@ -377,7 +403,7 @@ normal_classes = ["Normal"]
 # ==================== GRAD-CAM IMPLEMENTATION ====================
 
 def make_gradcam_heatmap(img_array, model, last_conv_layer_name, pred_index=None):
-    """Generate Grad-CAM heatmap with proper input handling"""
+    """Generate Grad-CAM heatmap"""
     try:
         # Get the last convolutional layer
         last_conv_layer = model.get_layer(last_conv_layer_name)
@@ -390,7 +416,9 @@ def make_gradcam_heatmap(img_array, model, last_conv_layer_name, pred_index=None
 
         # Compute the gradient of the top predicted class for the conv layer output
         with tf.GradientTape() as tape:
-            conv_outputs, predictions = grad_model(img_array)
+            # Convert numpy array to tensor and ensure proper shape
+            img_tensor = tf.convert_to_tensor(img_array, dtype=tf.float32)
+            conv_outputs, predictions = grad_model(img_tensor)
             if pred_index is None:
                 pred_index = tf.argmax(predictions[0])
             class_channel = predictions[:, pred_index]
@@ -611,20 +639,17 @@ def clinical_assessment_wizard():
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
         if st.session_state.wizard_step > 0:
-            # Fixed: Replaced use_container_width with width parameter
-            if st.button("← Previous", width="stretch"):
+            if st.button("← Previous", use_container_width=True):
                 st.session_state.wizard_step -= 1
                 st.rerun()
     
     with col3:
         if st.session_state.wizard_step < total_steps - 1:
-            # Fixed: Replaced use_container_width with width parameter
-            if st.button("Next →", width="stretch"):
+            if st.button("Next →", use_container_width=True):
                 st.session_state.wizard_step += 1
                 st.rerun()
         else:
-            # Fixed: Replaced use_container_width with width parameter
-            if st.button("Calculate Results", width="stretch", type="primary"):
+            if st.button("Calculate Results", use_container_width=True, type="primary"):
                 return calculate_risk_score()
     
     return None
@@ -714,30 +739,6 @@ def calculate_risk_score():
 
 # ==================== IMAGE ANALYSIS WITH GRAD-CAM ====================
 
-def preprocess_image_for_model(image, target_size=(224, 224)):
-    """Preprocess image for model input with proper formatting"""
-    try:
-        # Resize image
-        img = image.resize(target_size)
-        
-        # Convert to numpy array and normalize
-        img_array = np.array(img) / 255.0
-        
-        # Ensure RGB format
-        if len(img_array.shape) == 2:
-            img_array = np.stack([img_array] * 3, axis=-1)
-        elif img_array.shape[-1] == 4:
-            img_array = img_array[:, :, :3]
-        
-        # Add batch dimension
-        img_array = np.expand_dims(img_array, axis=0).astype(np.float32)
-        
-        return img_array
-    
-    except Exception as e:
-        st.error(f"Image preprocessing error: {e}")
-        return None
-
 def analyze_image(image, clinical_risk):
     """Analyze skin image with AI model and generate Grad-CAM"""
     
@@ -749,40 +750,33 @@ def analyze_image(image, clinical_risk):
     else:
         try:
             # Preprocess image for the model
-            img_array = preprocess_image_for_model(image)
+            img = image.resize((224, 224))
+            img_array = np.array(img) / 255.0
+            img_array = np.expand_dims(img_array, axis=0).astype(np.float32)
             
-            if img_array is None:
-                raise ValueError("Failed to preprocess image")
+            # Create a properly named input tensor
+            # Use dictionary input for the model with the correct layer name
+            inputs = {model.input_names[0]: img_array}
             
-            # Print input shape for debugging
-            st.write(f"Input tensor shape: {img_array.shape}")
-            st.write(f"Model expects: {model.input_shape if hasattr(model, 'input_shape') else 'unknown'}")
-            
-            # Make prediction
-            predictions = model.predict(img_array, verbose=0)
+            # Make prediction using the dictionary input
+            predictions = model.predict(inputs, verbose=0)
             class_idx = np.argmax(predictions[0])
             confidence = float(predictions[0][class_idx])
-            
-            # Ensure class index is within bounds
-            if class_idx >= len(classes):
-                st.warning(f"Model output index {class_idx} exceeds class list size {len(classes)}")
-                class_idx = 0
-            
-            pred_class = classes[class_idx]
+            pred_class = classes[class_idx] if class_idx < len(classes) else f"Class_{class_idx}"
             
             # Generate Grad-CAM heatmap
             if last_conv_layer:
+                # Create a properly formatted input for Grad-CAM
                 heatmap = make_gradcam_heatmap(img_array, model, last_conv_layer, class_idx)
                 if heatmap is not None:
-                    heatmap_img = overlay_heatmap(heatmap, image)
+                    heatmap_img = overlay_heatmap(heatmap, img)
                 else:
                     heatmap_img = None
             else:
                 heatmap_img = None
                 
         except Exception as e:
-            st.error(f"Model inference error: {str(e)}")
-            st.exception(e)  # This will show the full error traceback
+            st.error(f"Model inference error: {e}")
             pred_class = "Error in analysis"
             confidence = 0.0
             heatmap_img = None
@@ -888,7 +882,7 @@ def tracking_dashboard():
             """, unsafe_allow_html=True)
     
     # Export data
-    if st.button("📥 Export Patient Data", width="stretch"):
+    if st.button("📥 Export Patient Data", use_container_width=True):
         csv = df.to_csv(index=False)
         st.download_button(
             label="Download CSV",
@@ -923,7 +917,7 @@ def main():
         user_profile_ui()
         
         # Logout button
-        if st.button("🚪 Logout", width="stretch"):
+        if st.button("🚪 Logout", use_container_width=True):
             logout()
         
         st.markdown("---")
@@ -980,7 +974,7 @@ def main():
             # Store in session
             st.session_state['clinical_complete'] = True
             
-            if st.button("Proceed to Image Analysis →", width="stretch"):
+            if st.button("Proceed to Image Analysis →", use_container_width=True):
                 st.session_state['nav_to_image'] = True
                 st.rerun()
     
@@ -989,7 +983,7 @@ def main():
         
         if 'clinical_risk' not in st.session_state:
             st.warning("Please complete clinical assessment first")
-            if st.button("Go to Clinical Assessment", width="stretch"):
+            if st.button("Go to Clinical Assessment", use_container_width=True):
                 st.session_state['nav_to_clinical'] = True
                 st.rerun()
         else:
@@ -1016,7 +1010,7 @@ def main():
                         image = Image.open(camera_image)
                 
                 if 'image' in locals():
-                    if st.button("🔬 Analyze Image with Grad-CAM", width="stretch", type="primary"):
+                    if st.button("🔬 Analyze Image with Grad-CAM", use_container_width=True, type="primary"):
                         with st.spinner("Analyzing image with AI and generating Grad-CAM..."):
                             # Analyze image with Grad-CAM
                             ai_results = analyze_image(image, st.session_state['clinical_risk'])
@@ -1096,10 +1090,10 @@ def main():
                     # Action buttons
                     col_a, col_b = st.columns(2)
                     with col_a:
-                        if st.button("📋 Save to Record", width="stretch"):
+                        if st.button("📋 Save to Record", use_container_width=True):
                             st.success("Assessment saved to patient record!")
                     with col_b:
-                        if st.button("🔄 New Assessment", width="stretch"):
+                        if st.button("🔄 New Assessment", use_container_width=True):
                             for key in ['clinical_risk', 'ai_results', 'clinical_complete']:
                                 if key in st.session_state:
                                     del st.session_state[key]
