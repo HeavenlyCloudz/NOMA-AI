@@ -23,14 +23,18 @@ import time
 import json
 import random
 import numpy as np
-from datetime import datetime
+import sqlite3
+import hashlib
+import shutil
+from datetime import datetime, timedelta
 from PyQt5 import QtWidgets, QtGui, QtCore
 from PyQt5.QtWidgets import (QLabel, QVBoxLayout, QPushButton, QApplication,
                              QMessageBox, QProgressBar, QMainWindow, QScrollArea,
                              QWidget, QHBoxLayout, QTextEdit, QRadioButton,
-                             QSpinBox, QComboBox, QCheckBox, QGroupBox, QTabWidget)
+                             QSpinBox, QComboBox, QCheckBox, QGroupBox, QTabWidget,
+                             QListWidget, QListWidgetItem, QDialog, QLineEdit)
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QPointF
-from PyQt5.QtGui import QPainter, QPen, QColor, QBrush
+from PyQt5.QtGui import QPainter, QPen, QColor, QBrush, QPixmap
 from PIL import Image
 import tflite_runtime.interpreter as tflite
 from picamera2 import Picamera2
@@ -65,137 +69,11 @@ DISEASE_INFO = {
         "risk_factors": "Fair skin, history of sunburns, many moles, family history",
         "action": "URGENT: See dermatologist within 1-2 weeks"
     },
-    "Basal Cell Carcinoma": {
-        "description": "Most common skin cancer. Grows slowly and rarely spreads, but can cause damage to surrounding tissue.",
-        "warning_signs": "Pearl-like bump, pink growth, open sore that doesn't heal, shiny scar-like area",
-        "risk_factors": "Chronic sun exposure, fair skin, age over 50",
-        "action": "Schedule dermatology appointment (within 1 month)"
-    },
-    "Squamous Cell Carcinoma": {
-        "description": "Second most common skin cancer. Can spread if untreated, but usually grows slowly.",
-        "warning_signs": "Firm red nodule, flat lesion with scaly crust, sore that heals and re-opens",
-        "risk_factors": "Long-term sun exposure, indoor tanning, weakened immune system",
-        "action": "Schedule dermatology appointment (within 2-3 weeks)"
-    },
-    "Actinic Keratosis": {
-        "description": "Precancerous skin growth caused by sun damage. May develop into squamous cell carcinoma if untreated.",
-        "warning_signs": "Rough, scaly patch on sun-exposed skin, pink or red, feels like sandpaper",
-        "risk_factors": "Fair skin, chronic sun exposure, age over 40",
-        "action": "Monitor and consult dermatologist for possible treatment"
-    },
-    "Moles": {
-        "description": "Common benign growths of melanocytes. Most are harmless, but some can become melanoma.",
-        "warning_signs": "Normal moles are round, even-colored, and stable. Watch for changes!",
-        "risk_factors": "Fair skin, many moles (50+), family history of melanoma",
-        "action": "Regular self-checks, annual skin exam"
-    },
-    "Eczema": {
-        "description": "Inflammatory skin condition causing itchy, red, dry skin. Not cancerous.",
-        "warning_signs": "Itchy patches, dry scaly skin, redness, sometimes blisters",
-        "risk_factors": "Family history of allergies/asthma, dry skin, stress",
-        "action": "Use moisturizers, avoid triggers, see dermatologist if severe"
-    },
-    "Psoriasis": {
-        "description": "Chronic autoimmune condition causing rapid skin cell buildup. Not contagious or cancerous.",
-        "warning_signs": "Thick red patches with silvery scales, often on elbows/knees/scalp",
-        "risk_factors": "Family history, stress, infections, certain medications",
-        "action": "See dermatologist for treatment options"
-    },
-    "Acne": {
-        "description": "Common skin condition when hair follicles clog with oil and dead skin cells.",
-        "warning_signs": "Whiteheads, blackheads, pimples, cysts, usually on face/chest/back",
-        "risk_factors": "Hormones, certain medications, diet, stress",
-        "action": "Over-the-counter treatments, see dermatologist for severe cases"
-    },
-    "Rosacea": {
-        "description": "Chronic skin condition causing facial redness and visible blood vessels.",
-        "warning_signs": "Facial flushing, persistent redness, visible blood vessels, sometimes acne-like bumps",
-        "risk_factors": "Fair skin, age 30-50, family history",
-        "action": "Avoid triggers, see dermatologist for treatment"
-    },
-    "Warts": {
-        "description": "Benign growths caused by HPV virus. Contagious but not cancerous.",
-        "warning_signs": "Small rough bumps, may have black dots (clotted blood vessels)",
-        "risk_factors": "Direct contact with virus, broken skin, weak immune system",
-        "action": "Often resolve on their own, over-the-counter treatments available"
-    },
-    "Tinea": {
-        "description": "Fungal skin infection (ringworm). Not caused by worms and not cancerous.",
-        "warning_signs": "Ring-shaped rash with raised border, itchy, scaling",
-        "risk_factors": "Contact with infected people/pets, damp environments",
-        "action": "Antifungal creams, keep area clean and dry"
-    },
-    "Seborrheic Keratoses": {
-        "description": "Common benign skin growths that appear with age. Sometimes mistaken for warts or skin cancer.",
-        "warning_signs": "Waxy, stuck-on appearance, brown to black, often on chest/back/face",
-        "risk_factors": "Age over 40, family history",
-        "action": "Benign - no treatment needed unless irritated"
-    },
-    "Lichen": {
-        "description": "Inflammatory skin condition. Not contagious or cancerous.",
-        "warning_signs": "Purple, flat-topped bumps, often on wrists/ankles, itchy",
-        "risk_factors": "Stress, certain medications, hepatitis C",
-        "action": "See dermatologist for treatment options"
-    },
-    "Lupus": {
-        "description": "Autoimmune disease where immune system attacks healthy tissue. Not contagious.",
-        "warning_signs": "Butterfly-shaped rash across cheeks/nose, photosensitivity, joint pain",
-        "risk_factors": "Female, age 15-44, African/Asian/Latino descent",
-        "action": "See rheumatologist for proper diagnosis and treatment"
-    },
-    "Bullous": {
-        "description": "Blistering skin conditions. Not cancerous but requires medical attention.",
-        "warning_signs": "Large fluid-filled blisters on skin or mucous membranes",
-        "risk_factors": "Autoimmune disorders, certain medications, infections",
-        "action": "See dermatologist immediately for diagnosis"
-    },
-    "Candidiasis": {
-        "description": "Fungal infection caused by Candida yeast. Not cancerous.",
-        "warning_signs": "Red rash with satellite lesions, often in skin folds, itchy",
-        "risk_factors": "Antibiotics, diabetes, weakened immune system, moisture",
-        "action": "Antifungal creams, keep area dry, see doctor if persistent"
-    },
-    "Drug Eruption": {
-        "description": "Skin reaction to medication. Can range from mild to severe.",
-        "warning_signs": "Rash appearing days to weeks after starting new medication",
-        "risk_factors": "New medications, multiple medications, previous drug allergies",
-        "action": "Contact prescribing physician, do not stop medication without advice"
-    },
     "Infestations/Bites": {
-        "description": "Reactions to insect bites or parasitic infestations (scabies, lice).",
-        "warning_signs": "Itchy bumps, burrows in skin (scabies), visible insects",
-        "risk_factors": "Exposure to infested environments, close contact",
-        "action": "Treat underlying cause, anti-itch medications"
-    },
-    "Vascular Tumors": {
-        "description": "Growths of blood vessels. Usually benign (hemangiomas, angiomas).",
-        "warning_signs": "Red or purple bumps that blanch with pressure",
-        "risk_factors": "Often present at birth or develop with age",
-        "action": "Usually harmless, consult dermatologist if changing/bleeding"
-    },
-    "Vasculitis": {
-        "description": "Inflammation of blood vessels. Can affect skin and other organs.",
-        "warning_signs": "Palpable purpura (raised purple spots), ulcers, livedo reticularis",
-        "risk_factors": "Autoimmune diseases, infections, certain medications",
-        "action": "URGENT: See doctor immediately - can affect internal organs"
-    },
-    "Vitiligo": {
-        "description": "Autoimmune condition causing loss of skin pigment. Not contagious or cancerous.",
-        "warning_signs": "White patches on skin, often symmetric, may affect hair color",
-        "risk_factors": "Family history, other autoimmune diseases",
-        "action": "See dermatologist for treatment options (cosmetic or medical)"
-    },
-    "Sun/Sunlight Damage": {
-        "description": "Photoaging and sun-induced skin changes. Increases skin cancer risk.",
-        "warning_signs": "Wrinkles, age spots, leathery texture, actinic keratoses",
-        "risk_factors": "Chronic sun exposure, tanning beds, fair skin",
-        "action": "Sun protection, regular skin exams, see dermatologist for concerning spots"
-    },
-    "Benign Tumors": {
-        "description": "Non-cancerous growths that do not spread. Many types exist.",
-        "warning_signs": "Slow-growing, well-defined borders, usually stable over time",
-        "risk_factors": "Varies by type, often genetic or age-related",
-        "action": "Monitor for changes, can be removed if bothersome"
+        "description": "Reactions to insect bites or parasitic infestations (scabies, lice). Not cancerous but may cause discomfort.",
+        "warning_signs": "Itchy bumps, burrows in skin (scabies), visible insects, localized redness",
+        "risk_factors": "Exposure to infested environments, close contact with infected individuals, outdoor activities",
+        "action": "Treat underlying cause with appropriate medication, anti-itch creams available over-the-counter"
     },
     "Normal": {
         "description": "No concerning findings detected in this image.",
@@ -228,6 +106,142 @@ EDUCATIONAL_TIPS = [
     "Early detection saves lives - know your skin and what's normal for you.",
     "Share NOMA AI with others - democratizing skin health awareness!"
 ]
+
+# ---------------- LONGITUDINAL TRACKING DATABASE ---------------- #
+# Create shared folder for syncing
+SYNC_FOLDER = "/home/havil/operation_oracle_data"
+os.makedirs(SYNC_FOLDER, exist_ok=True)
+
+def init_tracking_db():
+    """Initialize the SQLite database for longitudinal tracking"""
+    conn = sqlite3.connect('/home/havil/noma_longitudinal.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS lesions (
+        lesion_id TEXT PRIMARY KEY,
+        first_seen TEXT,
+        body_location TEXT,
+        patient_name TEXT,
+        feature_descriptors BLOB
+    )
+    ''')
+    
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS scans (
+        scan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        lesion_id TEXT,
+        timestamp TEXT,
+        image_path TEXT,
+        prediction TEXT,
+        confidence REAL,
+        abcde_scores TEXT,
+        risk_level TEXT,
+        FOREIGN KEY (lesion_id) REFERENCES lesions(lesion_id)
+    )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    print("Longitudinal tracking database initialized")
+
+init_tracking_db()
+
+# ---------------- FEATURE EXTRACTOR FOR LESION MATCHING ---------------- #
+def extract_lesion_features(image_array):
+    """Creates a unique fingerprint of a lesion so we can find it again"""
+    try:
+        # Convert to grayscale
+        if len(image_array.shape) == 3:
+            gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = image_array
+        
+        # Resize to consistent size
+        gray = cv2.resize(gray, (224, 224))
+        
+        # ORB feature detector
+        orb = cv2.ORB_create(nfeatures=100)
+        keypoints, descriptors = orb.detectAndCompute(gray, None)
+        
+        if descriptors is not None:
+            # Convert descriptors to bytes for storage
+            return descriptors.tobytes(), len(keypoints)
+        else:
+            return None, 0
+    except Exception as e:
+        print(f"Feature extraction error: {e}")
+        return None, 0
+
+def compare_lesions(descriptors1_bytes, descriptors2_bytes, threshold=0.7):
+    """Compares two lesion fingerprints to see if they are the same lesion"""
+    try:
+        if descriptors1_bytes is None or descriptors2_bytes is None:
+            return 0.0, False
+        
+        # Convert bytes back to numpy arrays
+        desc1 = np.frombuffer(descriptors1_bytes, dtype=np.uint8)
+        desc1 = desc1.reshape((-1, 32))
+        desc2 = np.frombuffer(descriptors2_bytes, dtype=np.uint8)
+        desc2 = desc2.reshape((-1, 32))
+        
+        # BFMatcher finds matching features
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        matches = bf.match(desc1, desc2)
+        
+        matches = sorted(matches, key=lambda x: x.distance)
+        good_matches = matches[:30]
+        
+        match_score = len(good_matches) / min(len(desc1), len(desc2))
+        is_same = match_score > threshold
+        
+        return match_score, is_same
+    except Exception as e:
+        print(f"Comparison error: {e}")
+        return 0.0, False
+
+def detect_changes(old_scan, new_scan):
+    """Compare two scans of the same lesion and report changes"""
+    changes = []
+    
+    # Compare confidence
+    if new_scan.get('confidence', 0) - old_scan.get('confidence', 0) > 0.2:
+        changes.append(f"AI confidence increased by {(new_scan['confidence'] - old_scan['confidence'])*100:.0f}%")
+    
+    # Compare predictions
+    if new_scan.get('prediction', '') != old_scan.get('prediction', ''):
+        changes.append(f"Diagnosis changed from {old_scan.get('prediction', 'unknown')} to {new_scan.get('prediction', 'unknown')}")
+    
+    # Compare ABCDE scores
+    old_abcde = json.loads(old_scan.get('abcde_scores', '{}')) if isinstance(old_scan.get('abcde_scores'), str) else old_scan.get('abcde_scores', {})
+    new_abcde = json.loads(new_scan.get('abcde_scores', '{}')) if isinstance(new_scan.get('abcde_scores'), str) else new_scan.get('abcde_scores', {})
+    
+    risk_order = {'LOW': 0, 'MODERATE': 1, 'HIGH': 2, 'URGENT': 3}
+    old_risk = risk_order.get(old_scan.get('risk_level', 'LOW'), 0)
+    new_risk = risk_order.get(new_scan.get('risk_level', 'LOW'), 0)
+    
+    if new_risk > old_risk:
+        changes.append(f"Risk level increased from {old_scan.get('risk_level', 'LOW')} to {new_scan.get('risk_level', 'LOW')}")
+    
+    return changes
+
+def sync_scan_to_shared_folder(scan_data):
+    """Save scan result to synced folder so other device can see it"""
+    try:
+        filename = os.path.join(SYNC_FOLDER, f"noma_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.json")
+        
+        scan_data['source_device'] = 'NOMA_AI'
+        scan_data['scan_type'] = 'skin'
+        scan_data['timestamp'] = datetime.now().isoformat()
+        
+        with open(filename, 'w') as f:
+            json.dump(scan_data, f, indent=2)
+        
+        print(f"Scan synced to shared folder: {filename}")
+        return True
+    except Exception as e:
+        print(f"Sync error: {e}")
+        return False
 
 # ---------------- Simple GPIO Controller ---------------- #
 class SimpleLED:
@@ -327,7 +341,7 @@ class HealthPassport:
 
 health_passport = HealthPassport()
 
-# ---------------- ENHANCED Clinical Feature Extractor ---------------- #
+# ---------------- Clinical Feature Extractor ---------------- #
 class ClinicalFeatureExtractor:
     @staticmethod
     def calculate_asymmetry(image):
@@ -538,7 +552,334 @@ class ClinicalFeatureExtractor:
         
         return "\n".join(report)
 
-# ---------------- STEP-BY-STEP CLINICAL ASSESSOR (ENHANCED WITH COMPACT TOP NAV) ---------------- #
+# ---------------- OPERATION ORACLE DASHBOARD ---------------- #
+class OperationOracleDashboard(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_app = parent
+        self.initUI()
+        self.refresh_data()
+        
+    def initUI(self):
+        self.setWindowTitle("Operation Oracle - Unified Patient Record")
+        self.setMinimumSize(700, 500)
+        self.setStyleSheet("""
+            QDialog { background-color: #b8fcbf; }
+            QLabel { font-size: 14px; }
+            QListWidget { background-color: white; border: 2px solid #94ffed; border-radius: 10px; padding: 10px; font-size: 13px; }
+            QGroupBox { font-size: 16px; font-weight: bold; border: 2px solid #94ffed; border-radius: 8px; margin-top: 12px; padding-top: 10px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px 0 5px; }
+            QPushButton { font-size: 14px; font-weight: bold; padding: 8px 16px; border-radius: 8px; }
+        """)
+        
+        layout = QVBoxLayout()
+        layout.setSpacing(10)
+        layout.setContentsMargins(15, 15, 15, 15)
+        
+        # Title
+        title = QLabel("OPERATION ORACLE")
+        title.setStyleSheet("font-size: 28px; font-weight: bold; color: #00695c; padding: 10px;")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+        
+        subtitle = QLabel("Unified Patient Record | Cross-Modal Monitoring")
+        subtitle.setStyleSheet("font-size: 14px; color: #00695c;")
+        subtitle.setAlignment(Qt.AlignCenter)
+        layout.addWidget(subtitle)
+        
+        # Tab widget for different sections
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setStyleSheet("QTabWidget::pane { border: 2px solid #94ffed; border-radius: 10px; background-color: rgba(255,255,255,0.5); } QTabBar::tab { font-size: 14px; padding: 8px 16px; background-color: #defcee; border-radius: 8px; margin: 2px; } QTabBar::tab:selected { background-color: #94ffed; font-weight: bold; }")
+        
+        # Skin Scans Tab
+        skin_tab = QWidget()
+        skin_layout = QVBoxLayout(skin_tab)
+        
+        skin_label = QLabel("Recent Skin Scans (NOMA AI)")
+        skin_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00695c;")
+        skin_layout.addWidget(skin_label)
+        
+        self.skin_list = QListWidget()
+        skin_layout.addWidget(self.skin_list)
+        
+        self.tab_widget.addTab(skin_tab, "Skin Scans")
+        
+        # Lung Scans Tab (placeholder for PULMO AI)
+        lung_tab = QWidget()
+        lung_layout = QVBoxLayout(lung_tab)
+        
+        lung_label = QLabel("Recent Lung Scans (PULMO AI)")
+        lung_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00695c;")
+        lung_layout.addWidget(lung_label)
+        
+        self.lung_list = QListWidget()
+        lung_layout.addWidget(self.lung_list)
+        
+        self.tab_widget.addTab(lung_tab, "Lung Scans")
+        
+        # Tracked Lesions Tab
+        lesions_tab = QWidget()
+        lesions_layout = QVBoxLayout(lesions_tab)
+        
+        lesions_label = QLabel("Tracked Lesions (Longitudinal Monitoring)")
+        lesions_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00695c;")
+        lesions_layout.addWidget(lesions_label)
+        
+        self.lesions_list = QListWidget()
+        self.lesions_list.itemClicked.connect(self.on_lesion_selected)
+        lesions_layout.addWidget(self.lesions_list)
+        
+        self.lesion_detail = QTextEdit()
+        self.lesion_detail.setReadOnly(True)
+        self.lesion_detail.setMaximumHeight(150)
+        self.lesion_detail.setStyleSheet("background-color: white; border: 2px solid #94ffed; border-radius: 8px; padding: 8px;")
+        lesions_layout.addWidget(self.lesion_detail)
+        
+        self.tab_widget.addTab(lesions_tab, "Tracked Lesions")
+        
+        # Cross-Modal Alerts Tab
+        alerts_tab = QWidget()
+        alerts_layout = QVBoxLayout(alerts_tab)
+        
+        alerts_label = QLabel("Cross-Modal Clinical Alerts")
+        alerts_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #d32f2f;")
+        alerts_layout.addWidget(alerts_label)
+        
+        self.alerts_list = QListWidget()
+        alerts_layout.addWidget(self.alerts_list)
+        
+        self.tab_widget.addTab(alerts_tab, "Alerts")
+        
+        layout.addWidget(self.tab_widget)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        refresh_btn = QPushButton("REFRESH DATA")
+        refresh_btn.setStyleSheet("background-color: #94ffed; color: #00695c;")
+        refresh_btn.clicked.connect(self.refresh_data)
+        button_layout.addWidget(refresh_btn)
+        
+        close_btn = QPushButton("CLOSE")
+        close_btn.setStyleSheet("background-color: #ff9494; color: #690000;")
+        close_btn.clicked.connect(self.accept)
+        button_layout.addWidget(close_btn)
+        
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+    
+    def refresh_data(self):
+        """Refresh all data displays"""
+        self.load_skin_scans()
+        self.load_lung_scans()
+        self.load_tracked_lesions()
+        self.load_cross_modal_alerts()
+    
+    def load_skin_scans(self):
+        """Load skin scans from local database"""
+        self.skin_list.clear()
+        
+        try:
+            conn = sqlite3.connect('/home/havil/noma_longitudinal.db')
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT timestamp, prediction, confidence, risk_level
+                FROM scans
+                ORDER BY timestamp DESC
+                LIMIT 20
+            ''')
+            
+            scans = cursor.fetchall()
+            conn.close()
+            
+            for scan in scans:
+                timestamp, prediction, confidence, risk_level = scan
+                risk_icon = "🔴" if risk_level == "URGENT" else "🟡" if risk_level == "HIGH" else "🟢"
+                item_text = f"{risk_icon} {timestamp[:16]} - {prediction} ({confidence:.1%})"
+                self.skin_list.addItem(item_text)
+            
+            if len(scans) == 0:
+                self.skin_list.addItem("No skin scans recorded yet")
+                
+        except Exception as e:
+            self.skin_list.addItem(f"Error loading scans: {e}")
+    
+    def load_lung_scans(self):
+        """Load lung scans from synced folder (PULMO AI data)"""
+        self.lung_list.clear()
+        
+        try:
+            # Look for JSON files from PULMO AI in synced folder
+            lung_files = []
+            for f in os.listdir(SYNC_FOLDER):
+                if f.startswith('pulmo_') and f.endswith('.json'):
+                    lung_files.append(os.path.join(SYNC_FOLDER, f))
+            
+            lung_files.sort(reverse=True)
+            
+            for filepath in lung_files[:20]:
+                with open(filepath, 'r') as f:
+                    data = json.load(f)
+                
+                timestamp = data.get('timestamp', 'Unknown')[:16]
+                prediction = data.get('prediction', 'Unknown')
+                confidence = data.get('confidence', 0)
+                
+                self.lung_list.addItem(f"🫁 {timestamp} - {prediction} ({confidence:.1%})")
+            
+            if len(lung_files) == 0:
+                self.lung_list.addItem("No lung scans synced from PULMO AI yet")
+                self.lung_list.addItem("(Placeholder - PULMO AI will sync automatically)")
+                
+        except Exception as e:
+            self.lung_list.addItem(f"Error loading lung scans: {e}")
+    
+    def load_tracked_lesions(self):
+        """Load all tracked lesions with change detection"""
+        self.lesions_list.clear()
+        
+        try:
+            conn = sqlite3.connect('/home/havil/noma_longitudinal.db')
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT lesion_id, first_seen, body_location
+                FROM lesions
+                ORDER BY first_seen DESC
+            ''')
+            
+            lesions = cursor.fetchall()
+            
+            for lesion in lesions:
+                lesion_id, first_seen, body_location = lesion
+                location_text = f" - {body_location}" if body_location else ""
+                item_text = f"📍 {lesion_id[:8]}...{location_text} (first seen: {first_seen[:10]})"
+                self.lesions_list.addItem(item_text)
+            
+            if len(lesions) == 0:
+                self.lesions_list.addItem("No lesions being tracked yet")
+                self.lesions_list.addItem("Click 'Track Lesion' after a scan to start monitoring")
+                
+            conn.close()
+            
+        except Exception as e:
+            self.lesions_list.addItem(f"Error loading lesions: {e}")
+    
+    def on_lesion_selected(self, item):
+        """Show detailed change history for selected lesion"""
+        try:
+            # Extract lesion ID from item text
+            lesion_id_part = item.text().split(" ")[1].split("...")[0]
+            
+            conn = sqlite3.connect('/home/havil/noma_longitudinal.db')
+            cursor = conn.cursor()
+            
+            # Find full lesion ID
+            cursor.execute('SELECT lesion_id FROM lesions WHERE lesion_id LIKE ?', (lesion_id_part + '%',))
+            result = cursor.fetchone()
+            
+            if result:
+                lesion_id = result[0]
+                
+                # Get all scans for this lesion
+                cursor.execute('''
+                    SELECT timestamp, prediction, confidence, abcde_scores, risk_level
+                    FROM scans
+                    WHERE lesion_id = ?
+                    ORDER BY timestamp ASC
+                ''', (lesion_id,))
+                
+                scans = cursor.fetchall()
+                
+                detail_html = f"<h3 style='color:#00695c;'>Lesion: {lesion_id[:12]}...</h3>"
+                detail_html += f"<p><b>Total scans:</b> {len(scans)}</p>"
+                
+                if len(scans) >= 2:
+                    detail_html += "<h4 style='color:#00695c;'>Change History:</h4>"
+                    
+                    for i in range(1, len(scans)):
+                        prev = {'timestamp': scans[i-1][0], 'prediction': scans[i-1][1], 
+                                'confidence': scans[i-1][2], 'abcde_scores': scans[i-1][3],
+                                'risk_level': scans[i-1][4]}
+                        curr = {'timestamp': scans[i][0], 'prediction': scans[i][1],
+                                'confidence': scans[i][2], 'abcde_scores': scans[i][3],
+                                'risk_level': scans[i][4]}
+                        
+                        changes = detect_changes(prev, curr)
+                        
+                        if changes:
+                            detail_html += f"<p><b>{curr['timestamp'][:16]}:</b></p>"
+                            for change in changes:
+                                detail_html += f"<p style='margin-left:20px; color:#d32f2f;'>⚠️ {change}</p>"
+                
+                detail_html += "<h4 style='color:#00695c; margin-top:10px;'>Scan History:</h4>"
+                for scan in scans:
+                    detail_html += f"<p>• {scan[0][:16]} - {scan[1]} ({scan[2]:.1%}) - Risk: {scan[4]}</p>"
+                
+                self.lesion_detail.setHtml(detail_html)
+                
+            conn.close()
+            
+        except Exception as e:
+            self.lesion_detail.setText(f"Error loading details: {e}")
+    
+    def load_cross_modal_alerts(self):
+        """Generate cross-modal alerts based on combined data"""
+        self.alerts_list.clear()
+        
+        alerts = []
+        
+        try:
+            conn = sqlite3.connect('/home/havil/noma_longitudinal.db')
+            cursor = conn.cursor()
+            
+            # Check for high-risk skin lesions
+            thirty_days_ago = (datetime.now() - timedelta(days=30)).isoformat()
+            
+            cursor.execute('''
+                SELECT timestamp, prediction, confidence, risk_level
+                FROM scans
+                WHERE risk_level IN ('HIGH', 'URGENT')
+                AND timestamp > ?
+                ORDER BY timestamp DESC
+            ''', (thirty_days_ago,))
+            
+            high_risk_scans = cursor.fetchall()
+            
+            for scan in high_risk_scans:
+                timestamp, prediction, confidence, risk_level = scan
+                alerts.append(f"⚠️ HIGH RISK SKIN LESION detected on {timestamp[:10]}: {prediction} ({confidence:.1%}) - Urgent follow-up recommended")
+            
+            # Check for missing lung scans when skin is high risk
+            if high_risk_scans:
+                cursor.execute('''
+                    SELECT COUNT(*) FROM scans
+                    WHERE timestamp > ?
+                ''', (thirty_days_ago,))
+                
+                recent_skin_count = cursor.fetchone()[0]
+                
+                # Look for lung scans (simulated - would come from PULMO AI sync)
+                lung_files = [f for f in os.listdir(SYNC_FOLDER) if f.startswith('pulmo_') and f.endswith('.json')]
+                
+                if len(lung_files) == 0 and recent_skin_count > 0:
+                    alerts.append("🔔 RECOMMENDATION: Consider lung screening with PULMO AI (paraneoplastic syndrome risk assessment)")
+            
+            conn.close()
+            
+        except Exception as e:
+            alerts.append(f"Error generating alerts: {e}")
+        
+        if len(alerts) == 0:
+            self.alerts_list.addItem("✅ No active cross-modal alerts")
+            self.alerts_list.addItem("All monitored parameters within normal range")
+        else:
+            for alert in alerts:
+                self.alerts_list.addItem(alert)
+
+# ---------------- STEP-BY-STEP CLINICAL ASSESSOR ---------------- #
 class StepByStepClinicalAssessor(QtWidgets.QDialog):
     def __init__(self, parent=None, cnn_prediction="", cnn_confidence=0.0):
         super().__init__(parent)
@@ -713,12 +1054,10 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.setLayout(main_layout)
 
     def clear_question_area(self):
-        # Clear the question layout but keep the stretch
         while self.question_layout.count():
             item = self.question_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        # Re-add stretch
         self.question_layout.addStretch()
         self.current_widgets.clear()
         QApplication.processEvents()
@@ -1143,6 +1482,7 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         if self.parent_app:
             self.parent_app.stop_yellow_blinking()
 
+        # Calculate ABCDE risk score
         abcde_score = 0
         if self.abcde_answers['asymmetry']:
             abcde_score += 1
@@ -1159,6 +1499,7 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         elif self.abcde_answers['evolution'] == 'fast':
             abcde_score += 2
 
+        # Calculate patient risk score
         patient_score = 0
         if self.patient_data['age'] > 50:
             patient_score += 1
@@ -1171,36 +1512,106 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         if self.patient_data.get('personal_history', False):
             patient_score += 1
 
-        if "melanoma" in self.cnn_prediction.lower() or "carcinoma" in self.cnn_prediction.lower():
-            cnn_weight = 3
-        elif self.cnn_prediction.lower() == "normal":
-            cnn_weight = 0
-        else:
-            cnn_weight = 1
+        # Determine risk level
+        risk_level = "LOW"
+        if abcde_score >= 4 or (abcde_score >= 3 and patient_score >= 3) or self.abcde_answers['evolution'] == 'fast':
+            risk_level = "URGENT"
+        elif abcde_score >= 2 or patient_score >= 3:
+            risk_level = "HIGH"
+        elif abcde_score >= 1 or patient_score >= 2:
+            risk_level = "MODERATE"
 
-        total_risk = (
-            (abcde_score / 8.0) * 40 +
-            (patient_score / 5.0) * 20 +
-            (cnn_weight * self.cnn_confidence) * 40
+        # Determine if this is a high risk melanoma case
+        is_high_risk_melanoma = (
+            abcde_score >= 4 or
+            (abcde_score >= 3 and patient_score >= 3) or
+            self.abcde_answers['evolution'] == 'fast' or
+            (self.abcde_answers['asymmetry'] and self.abcde_answers['border'] and 
+             self.abcde_answers['color'] == 'many')
         )
+        
+        # Check if user reported itching
+        is_itchy = self.patient_data.get('itchy', False)
+        
+        # DECISION LOGIC FOR FINAL PREDICTION
+        if is_itchy and not is_high_risk_melanoma:
+            final_prediction = "Infestations/Bites"
+            final_confidence = 0.90
+            clinical_rationale = (
+                "Clinical assessment indicates infestation or insect bites based on:\n"
+                "- Patient reported itching as primary symptom\n"
+                "- No concerning ABCDE features detected\n"
+                "- Clinical pattern consistent with benign, self-limiting condition"
+            )
+            
+        elif is_high_risk_melanoma:
+            final_prediction = "Melanoma"
+            final_confidence = 0.85
+            clinical_rationale = (
+                "Clinical assessment indicates potential melanoma based on:\n"
+                f"- ABCDE score of {abcde_score}/8 indicating multiple concerning features\n"
+                f"- Patient risk score of {patient_score}/5\n"
+                "- Multiple warning signs detected requiring urgent evaluation"
+            )
+            
+        else:
+            final_prediction = self.cnn_prediction
+            final_confidence = self.cnn_confidence
+            clinical_rationale = "Based on combined AI analysis and clinical assessment."
+
+        # Calculate total risk score
+        if final_prediction == "Melanoma":
+            total_risk = 85
+            led_color = "RED"
+            recommendation = """URGENT: Dermatology referral (within 1-2 weeks)
+Do not delay evaluation
+Monitor for any changes
+Avoid sun exposure"""
+        elif final_prediction == "Infestations/Bites":
+            total_risk = 15
+            led_color = "YELLOW"
+            recommendation = """Likely infestation or insect bites
+Over-the-counter anti-itch cream may help
+Keep area clean and avoid scratching
+See healthcare provider if condition worsens or persists beyond 1-2 weeks"""
+        else:
+            total_risk = (
+                (abcde_score / 8.0) * 40 +
+                (patient_score / 5.0) * 20 +
+                (final_confidence) * 40
+            )
+            
+            if total_risk >= 70:
+                led_color = "RED"
+                recommendation = """URGENT: Dermatology referral (within 1-2 weeks)
+Do not delay evaluation
+Monitor for any changes
+Avoid sun exposure"""
+            elif total_risk >= 40:
+                led_color = "YELLOW"
+                recommendation = """Schedule dermatology appointment (4-6 weeks)
+Monitor monthly for changes
+Practice sun protection
+Use SPF 30+ daily"""
+            else:
+                led_color = "GREEN"
+                recommendation = """Continue regular self-checks
+Annual skin examination recommended
+Practice sun safety
+Use SPF 15+ daily"""
 
         self.final_results = {
             'abcde_score': abcde_score,
             'patient_score': patient_score,
             'total_risk': total_risk,
-            'cnn_prediction': self.cnn_prediction,
-            'cnn_confidence': self.cnn_confidence
+            'cnn_prediction': final_prediction,
+            'cnn_confidence': final_confidence,
+            'led_color': led_color,
+            'recommendation': recommendation,
+            'clinical_rationale': clinical_rationale,
+            'risk_level': risk_level,
+            'abcde_scores_json': json.dumps(self.abcde_answers)
         }
-
-        if total_risk >= 70:
-            self.final_results['led_color'] = "RED"
-            self.final_results['recommendation'] = """URGENT: Dermatology referral (within 1-2 weeks)\nDo not delay evaluation\nMonitor for any changes\nAvoid sun exposure"""
-        elif total_risk >= 40:
-            self.final_results['led_color'] = "YELLOW"
-            self.final_results['recommendation'] = """Schedule dermatology appointment (4-6 weeks)\nMonitor monthly for changes\nPractice sun protection\nUse SPF 30+ daily"""
-        else:
-            self.final_results['led_color'] = "GREEN"
-            self.final_results['recommendation'] = """Continue regular self-checks\nAnnual skin examination recommended\nPractice sun safety\nUse SPF 15+ daily"""
 
         if self.parent_app:
             self.parent_app.show_green_completion_pattern()
@@ -1298,6 +1709,8 @@ class NomaAIApp(QMainWindow):
         self.blink_state = False
         self.blink_count = 0
         self.max_blinks = 20
+        self.current_image_for_tracking = None
+        self.current_results_for_tracking = None
 
         self.classes = [
             "Acne", "Actinic Keratosis", "Benign Tumors", "Bullous",
@@ -1415,22 +1828,40 @@ class NomaAIApp(QMainWindow):
         self.classify_button.setEnabled(False)
         layout.addWidget(self.classify_button)
 
+        # Operation Oracle Dashboard button
+        oracle_button = QPushButton("OPERATION ORACLE DASHBOARD")
+        oracle_button.setMinimumHeight(60)
+        oracle_button.setStyleSheet("""
+            QPushButton {
+                font-size: 18px;
+                font-weight: bold;
+                padding: 12px 10px;
+                background-color: #c8e6df;
+                color: #00695c;
+                border: 3px solid #00695c;
+                border-radius: 15px;
+                margin: 5px;
+            }
+            QPushButton:hover { background-color: #b2dfdb; }
+        """)
+        oracle_button.clicked.connect(self.open_oracle_dashboard)
+        layout.addWidget(oracle_button)
+
         # LED Guide button
         self.led_guide_button = QPushButton("LED STATUS GUIDE")
-        self.led_guide_button.setMinimumHeight(80)
+        self.led_guide_button.setMinimumHeight(60)
         self.led_guide_button.setStyleSheet("""
             QPushButton {
-                font-size: 20px;
+                font-size: 18px;
                 font-weight: bold;
-                padding: 15px 10px;
+                padding: 12px 10px;
                 background-color: #ffd794;
                 color: #654700;
-                border: 4px solid #dfc080;
-                border-radius: 20px;
-                margin: 10px;
+                border: 3px solid #dfc080;
+                border-radius: 15px;
+                margin: 5px;
             }
-            QPushButton:hover { background-color: #ffe7a8; border: 4px solid #ffd794; }
-            QPushButton:pressed { background-color: #dfc080; color: #402d00; }
+            QPushButton:hover { background-color: #ffe7a8; }
         """)
         self.led_guide_button.clicked.connect(self.show_led_guide)
         layout.addWidget(self.led_guide_button)
@@ -1524,18 +1955,38 @@ class NomaAIApp(QMainWindow):
         
         layout.addWidget(analysis_container)
 
-        # Open Source / Documentation button
-        self.docs_button = QPushButton("BUILD YOUR OWN | OPEN-SOURCE DOCS")
-        self.docs_button.setMinimumHeight(60)
-        self.docs_button.setStyleSheet("""
+        # Track Lesion button (appears after scan)
+        self.track_button = QPushButton("TRACK THIS LESION")
+        self.track_button.setMinimumHeight(50)
+        self.track_button.setStyleSheet("""
             QPushButton {
                 font-size: 16px;
                 font-weight: bold;
-                padding: 12px 10px;
+                padding: 10px;
+                background-color: #94ffed;
+                color: #00695c;
+                border: 2px solid #00695c;
+                border-radius: 12px;
+                margin: 5px;
+            }
+            QPushButton:hover { background-color: #a8fff0; }
+        """)
+        self.track_button.clicked.connect(self.track_current_lesion)
+        self.track_button.setVisible(False)
+        layout.addWidget(self.track_button)
+
+        # Open Source / Documentation button
+        self.docs_button = QPushButton("BUILD YOUR OWN | OPEN-SOURCE DOCS")
+        self.docs_button.setMinimumHeight(50)
+        self.docs_button.setStyleSheet("""
+            QPushButton {
+                font-size: 14px;
+                font-weight: bold;
+                padding: 10px;
                 background-color: #c8e6df;
                 color: #00695c;
-                border: 3px solid #94ffed;
-                border-radius: 15px;
+                border: 2px solid #94ffed;
+                border-radius: 12px;
                 margin: 5px;
             }
             QPushButton:hover { background-color: #b2dfdb; }
@@ -1545,21 +1996,20 @@ class NomaAIApp(QMainWindow):
 
         # Shutdown button
         self.shutdown_button = QPushButton("SHUTDOWN DEVICE")
-        self.shutdown_button.setMinimumHeight(80)
+        self.shutdown_button.setMinimumHeight(60)
         self.shutdown_button.setObjectName("shutdown_button")
         self.shutdown_button.setStyleSheet("""
             QPushButton#shutdown_button {
-                font-size: 20px;
+                font-size: 16px;
                 font-weight: bold;
-                padding: 15px 10px;
+                padding: 10px;
                 background-color: #ff9494;
                 color: #690000;
-                border: 4px solid #df8080;
-                border-radius: 20px;
-                margin: 10px;
+                border: 3px solid #df8080;
+                border-radius: 15px;
+                margin: 5px;
             }
-            QPushButton#shutdown_button:hover { background-color: #ffa8a8; border: 4px solid #ff9494; }
-            QPushButton#shutdown_button:pressed { background-color: #df8080; color: #400000; }
+            QPushButton#shutdown_button:hover { background-color: #ffa8a8; }
         """)
         self.shutdown_button.clicked.connect(self.shutdown_device)
         layout.addWidget(self.shutdown_button)
@@ -1580,6 +2030,139 @@ class NomaAIApp(QMainWindow):
 
     def rotate_tip(self):
         self.tip_label.setText("Tip: " + random.choice(EDUCATIONAL_TIPS))
+
+    def open_oracle_dashboard(self):
+        """Open the unified Operation Oracle dashboard"""
+        dashboard = OperationOracleDashboard(self)
+        dashboard.exec_()
+
+    def track_current_lesion(self):
+        """Save the current lesion for longitudinal tracking"""
+        if self.current_image_for_tracking is None or self.current_results_for_tracking is None:
+            QMessageBox.warning(self, "No Data", "No scan available to track. Please perform a scan first.")
+            return
+        
+        # Ask for body location
+        location, ok = QInputDialog.getText(self, "Track Lesion", 
+                                            "Where is this lesion located?\n(e.g., 'left forearm', 'upper back', 'right cheek')")
+        
+        if not ok or not location.strip():
+            return
+        
+        try:
+            # Extract features from the image
+            features_bytes, n_keypoints = extract_lesion_features(self.current_image_for_tracking)
+            
+            if features_bytes is None:
+                QMessageBox.warning(self, "Feature Extraction Failed", 
+                                   "Could not extract unique features from this lesion. Please try with better lighting and focus.")
+                return
+            
+            # Generate unique lesion ID
+            lesion_id = hashlib.md5(f"{location}{datetime.now().isoformat()}".encode()).hexdigest()
+            
+            # Save image for tracking
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            image_filename = f"/home/havil/noma_ai/tracked_lesions/{lesion_id}_{timestamp}.jpg"
+            os.makedirs("/home/havil/noma_ai/tracked_lesions", exist_ok=True)
+            
+            # Save the image
+            img_pil = Image.fromarray(self.current_image_for_tracking)
+            img_pil.save(image_filename)
+            
+            # Connect to database
+            conn = sqlite3.connect('/home/havil/noma_longitudinal.db')
+            cursor = conn.cursor()
+            
+            # Check if this lesion matches any existing lesion
+            cursor.execute('SELECT lesion_id, feature_descriptors FROM lesions')
+            existing_lesions = cursor.fetchall()
+            
+            matched_lesion_id = None
+            match_score = 0
+            
+            for existing_id, existing_features in existing_lesions:
+                if existing_features:
+                    score, is_match = compare_lesions(features_bytes, existing_features)
+                    if is_match and score > match_score:
+                        match_score = score
+                        matched_lesion_id = existing_id
+            
+            if matched_lesion_id:
+                # This is an existing lesion - add new scan
+                lesion_id = matched_lesion_id
+                message = f"Lesion matched to existing record (match score: {match_score:.1%})\nAdding new scan to history."
+                
+                cursor.execute('''
+                    INSERT INTO scans (lesion_id, timestamp, image_path, prediction, confidence, abcde_scores, risk_level)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (lesion_id, datetime.now().isoformat(), image_filename,
+                      self.current_results_for_tracking.get('cnn_prediction', 'unknown'),
+                      self.current_results_for_tracking.get('cnn_confidence', 0),
+                      self.current_results_for_tracking.get('abcde_scores_json', '{}'),
+                      self.current_results_for_tracking.get('risk_level', 'LOW')))
+                
+                # Check for changes
+                cursor.execute('''
+                    SELECT timestamp, prediction, confidence, abcde_scores, risk_level
+                    FROM scans
+                    WHERE lesion_id = ?
+                    ORDER BY timestamp ASC
+                ''', (lesion_id,))
+                
+                scans = cursor.fetchall()
+                
+                if len(scans) >= 2:
+                    prev = {'timestamp': scans[-2][0], 'prediction': scans[-2][1], 
+                            'confidence': scans[-2][2], 'abcde_scores': scans[-2][3],
+                            'risk_level': scans[-2][4]}
+                    curr = {'timestamp': scans[-1][0], 'prediction': scans[-1][1],
+                            'confidence': scans[-1][2], 'abcde_scores': scans[-1][3],
+                            'risk_level': scans[-1][4]}
+                    
+                    changes = detect_changes(prev, curr)
+                    
+                    if changes:
+                        message += "\n\n⚠️ CHANGES DETECTED:\n" + "\n".join(f"  • {c}" for c in changes)
+                    else:
+                        message += "\n\n✅ No significant changes detected since last scan."
+            else:
+                # New lesion - create record
+                message = f"New lesion tracked successfully!\nLocation: {location}\nID: {lesion_id[:12]}..."
+                
+                cursor.execute('''
+                    INSERT INTO lesions (lesion_id, first_seen, body_location, feature_descriptors)
+                    VALUES (?, ?, ?, ?)
+                ''', (lesion_id, datetime.now().isoformat(), location, features_bytes))
+                
+                cursor.execute('''
+                    INSERT INTO scans (lesion_id, timestamp, image_path, prediction, confidence, abcde_scores, risk_level)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (lesion_id, datetime.now().isoformat(), image_filename,
+                      self.current_results_for_tracking.get('cnn_prediction', 'unknown'),
+                      self.current_results_for_tracking.get('cnn_confidence', 0),
+                      self.current_results_for_tracking.get('abcde_scores_json', '{}'),
+                      self.current_results_for_tracking.get('risk_level', 'LOW')))
+            
+            conn.commit()
+            conn.close()
+            
+            # Sync to shared folder for PULMO AI
+            sync_data = {
+                'type': 'skin_scan',
+                'lesion_id': lesion_id,
+                'prediction': self.current_results_for_tracking.get('cnn_prediction', 'unknown'),
+                'confidence': self.current_results_for_tracking.get('cnn_confidence', 0),
+                'risk_level': self.current_results_for_tracking.get('risk_level', 'LOW'),
+                'location': location,
+                'image_path': image_filename
+            }
+            sync_scan_to_shared_folder(sync_data)
+            
+            QMessageBox.information(self, "Lesion Tracked", message)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to track lesion: {e}")
 
     def show_documentation(self):
         dialog = QtWidgets.QDialog(self)
@@ -1602,12 +2185,14 @@ class NomaAIApp(QMainWindow):
         <h2 style='color: #00695c;'>Democratizing Skin Health</h2>
         <p>NOMA AI is completely open-source - hardware, software, and documentation. You can build your own device!</p>
         
-        <h3 style='color: #00695c; margin-top: 20px;'>Enhanced Explainable Features:</h3>
+        <h3 style='color: #00695c; margin-top: 20px;'>Enhanced Features:</h3>
         <ul>
             <li><b>Grad-CAM Heatmaps:</b> Visualize which areas influenced the AI's decision</li>
             <li><b>Clinical Feature Extraction:</b> Automated asymmetry, border, color, and diameter analysis</li>
             <li><b>ABCDE Integration:</b> Gold-standard clinical assessment combined with AI</li>
-            <li><b>Comprehensive Risk Factors:</b> Patient history, symptoms, and onset patterns</li>
+            <li><b>Longitudinal Tracking:</b> Track lesions over time and detect changes</li>
+            <li><b>Cross-Modal Syncing:</b> Share data between NOMA AI and PULMO AI</li>
+            <li><b>Unified Dashboard:</b> Operation Oracle central command</li>
         </ul>
         
         <h3 style='color: #00695c; margin-top: 20px;'>Hardware Requirements:</h3>
@@ -1620,34 +2205,21 @@ class NomaAIApp(QMainWindow):
             <li>3D printed enclosure (files available online)</li>
         </ul>
         
-        <h3 style='color: #00695c; margin-top: 20px;'>Software Stack:</h3>
+        <h3 style='color: #00695c; margin-top: 20px;'>Longitudinal Tracking:</h3>
         <ul>
-            <li>Raspberry Pi OS Lite (Bookworm)</li>
-            <li>Python 3.9+ with PyQt5 for GUI</li>
-            <li>TensorFlow Lite for model inference</li>
-            <li>Picamera2 for camera control</li>
-            <li>OpenCV for image processing</li>
+            <li>Each lesion gets a unique fingerprint using ORB feature detection</li>
+            <li>New scans automatically match to existing lesions</li>
+            <li>Change detection alerts when lesions evolve</li>
+            <li>Complete historical record for each tracked lesion</li>
         </ul>
         
-        <h3 style='color: #00695c; margin-top: 20px;'>Model Training:</h3>
+        <h3 style='color: #00695c; margin-top: 20px;'>Cross-Device Syncing:</h3>
         <ul>
-            <li>Dataset: 12,900 images across 24 skin conditions</li>
-            <li>Architecture: MobileNetV3 (ImageNet pre-trained)</li>
-            <li>Input size: 224x224 pixels</li>
-            <li>Framework: TensorFlow 2.18</li>
-            <li>Deployment: Optimized .tflite for edge inference</li>
+            <li>Shared folder at /home/havil/operation_oracle_data</li>
+            <li>NOMA AI and PULMO AI automatically share findings</li>
+            <li>Cross-modal alerts for paraneoplastic syndrome detection</li>
+            <li>Works offline - no internet required</li>
         </ul>
-        
-        <h3 style='color: #00695c; margin-top: 20px;'>Educational Resources:</h3>
-        <ul>
-            <li><b>Online Course:</b> "Building Medical AI for Edge Devices" (Coming soon)</li>
-            <li><b>GitHub Repository:</b> Complete source code and schematics</li>
-            <li><b>YouTube Tutorials:</b> Step-by-step assembly guide</li>
-            <li><b>Community Forum:</b> Share your builds and improvements</li>
-        </ul>
-        
-        <h3 style='color: #00695c; margin-top: 20px;'>How Grad-CAM Works:</h3>
-        <p>The heatmap visualization shows which areas of the image most influenced the AI's decision. Red/yellow areas indicate regions that strongly suggested the predicted condition, while blue/green areas had less influence. This helps you understand what the AI is "looking at" when making its prediction.</p>
         
         <h3 style='color: #00695c; margin-top: 20px;'>Contribute:</h3>
         <ul>
@@ -1687,9 +2259,9 @@ class NomaAIApp(QMainWindow):
         text_edit.setHtml("""
         <h3>YELLOW BLINKING:</h3><ul><li>System is analyzing your image</li><li>Please wait while processing completes</li><li>This takes about 5-10 seconds</li></ul>
         <h3>SOLID RED:</h3><ul><li>MALIGNANT detection</li><li>High risk potential</li><li>Consult dermatologist promptly</li><li>Examples: Melanoma, Basal Cell Carcinoma, Squamous Cell Carcinoma</li></ul>
-        <h3>SOLID YELLOW:</h3><ul><li>BENIGN detection</li><li>Moderate risk or uncertain</li><li>Monitor regularly</li><li>Examples: Moles, Eczema, Psoriasis, Acne</li></ul>
+        <h3>SOLID YELLOW:</h3><ul><li>BENIGN detection</li><li>Moderate risk or uncertain</li><li>Monitor regularly</li><li>Examples: Moles, Eczema, Psoriasis, Acne, Infestations/Bites</li></ul>
         <h3>SOLID GREEN:</h3><ul><li>NORMAL skin</li><li>Low risk</li><li>Continue regular self-checks</li></ul>
-        <h3>ADDITIONAL NOTES:</h3><ul><li>All LEDs turn off automatically after 8 seconds</li><li>Low confidence results will show yellow LED with recommendation to retake image</li><li>Ensure good lighting and clear focus for best results</li><li>Position lesion clearly in the center of the camera view</li></ul>
+        <h3>LONGITUDINAL TRACKING:</h3><ul><li>Click 'Track This Lesion' after a scan to monitor over time</li><li>The system will alert you to any changes in future scans</li><li>View all tracked lesions in Operation Oracle Dashboard</li></ul>
         """)
         layout.addWidget(text_edit)
         exit_button = QPushButton("CLOSE GUIDE")
@@ -1764,6 +2336,7 @@ class NomaAIApp(QMainWindow):
             return
         self.is_classifying = True
         self.classify_button.setEnabled(False)
+        self.track_button.setVisible(False)
         self.progress_bar.setVisible(True)
         self.results_label.setText("Starting analysis...")
         QApplication.processEvents()
@@ -1851,6 +2424,10 @@ class NomaAIApp(QMainWindow):
 
             if dialog.exec_():
                 results = dialog.final_results
+                
+                # Store for tracking
+                self.current_image_for_tracking = frame.copy()
+                self.current_results_for_tracking = results
 
                 # Generate Grad-CAM
                 heatmap = self.generate_grad_cam_heatmap(image, predicted_class, confidence)
@@ -1861,7 +2438,7 @@ class NomaAIApp(QMainWindow):
                 self.analysis_label.setPixmap(pixmap)
                 
                 self.gradcam_explanation.setText(
-                    "🔬 GRAD-CAM EXPLANATION: Red/yellow areas show where the AI focused most. "
+                    "Grad-CAM Explanation: Red/yellow areas show where the AI focused most. "
                     "These regions had the strongest influence on the prediction of " + predicted_class + ". "
                     "Compare this heatmap with the clinical features below to understand the AI's reasoning."
                 )
@@ -1875,6 +2452,32 @@ class NomaAIApp(QMainWindow):
                     self.set_leds_timed(False, False, True)
 
                 disease_info = self.get_disease_info_html(results['cnn_prediction'])
+
+                # Save scan to local database
+                try:
+                    conn = sqlite3.connect('/home/havil/noma_longitudinal.db')
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        INSERT INTO scans (lesion_id, timestamp, image_path, prediction, confidence, abcde_scores, risk_level)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', ('single_scan', datetime.now().isoformat(), '', 
+                          results['cnn_prediction'], results['cnn_confidence'],
+                          results.get('abcde_scores_json', '{}'), results.get('risk_level', 'LOW')))
+                    conn.commit()
+                    conn.close()
+                except Exception as e:
+                    print(f"Database save error: {e}")
+
+                # Sync to shared folder
+                sync_data = {
+                    'type': 'skin_scan',
+                    'prediction': results['cnn_prediction'],
+                    'confidence': results['cnn_confidence'],
+                    'risk_level': results.get('risk_level', 'LOW'),
+                    'abcde_score': results['abcde_score'],
+                    'patient_score': results['patient_score']
+                }
+                sync_scan_to_shared_folder(sync_data)
 
                 result_text = f"""
 COMPREHENSIVE ANALYSIS COMPLETE
@@ -1895,6 +2498,7 @@ CLINICAL ASSESSMENT:
 - ABCDE Score: {results['abcde_score']}/8
 - Patient Risk: {results['patient_score']}/5
 - Total Risk: {results['total_risk']:.0f}/100
+- Risk Level: {results.get('risk_level', 'LOW')}
 
 RISK LEVEL: {led_color}
 
@@ -1903,24 +2507,30 @@ RECOMMENDATION:
 
 {disease_info}
 
-🔬 UNDERSTANDING YOUR RESULTS:
+CLINICAL RATIONALE:
+{results.get('clinical_rationale', 'Based on combined AI analysis and clinical assessment.')}
+
+UNDERSTANDING YOUR RESULTS:
 - The heatmap above shows which areas most influenced the AI
 - The clinical features match what dermatologists look for
-- Compare both to understand the complete assessment
+- Click 'Track This Lesion' to monitor this spot over time
 
 *This is a screening tool only. Always consult a healthcare professional.*
 """
                 self.results_label.setText(result_text)
+                self.track_button.setVisible(True)
 
                 health_passport.save_assessment(results)
 
             else:
                 self.results_label.setText("Assessment cancelled.")
                 turn_off_leds()
+                self.track_button.setVisible(False)
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Analysis failed: {str(e)}")
             self.results_label.setText(f"Error: {str(e)}")
+            self.track_button.setVisible(False)
         finally:
             self.is_classifying = False
             self.classify_button.setEnabled(True)
@@ -1938,7 +2548,7 @@ RECOMMENDATION:
 
     def load_model(self):
         try:
-            model_path = '/home/havil/noma_ai/nomaai_model.tflite'
+            model_path = '/home/havil/noma_ai/noma_model_quantized_int8.tflite'
             self.interpreter = tflite.Interpreter(model_path=model_path)
             self.interpreter.allocate_tensors()
             self.input_details = self.interpreter.get_input_details()
