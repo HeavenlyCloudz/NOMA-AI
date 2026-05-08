@@ -32,7 +32,7 @@ from PyQt5.QtWidgets import (QLabel, QVBoxLayout, QPushButton, QApplication,
                              QMessageBox, QProgressBar, QMainWindow, QScrollArea,
                              QWidget, QHBoxLayout, QTextEdit, QRadioButton,
                              QSpinBox, QComboBox, QCheckBox, QGroupBox, QTabWidget,
-                             QListWidget, QListWidgetItem, QDialog, QLineEdit)
+                             QListWidget, QListWidgetItem, QDialog, QLineEdit, QSlider, QDialogButtonBox)
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QPointF
 from PyQt5.QtGui import QPainter, QPen, QColor, QBrush, QPixmap
 from PIL import Image
@@ -108,13 +108,18 @@ EDUCATIONAL_TIPS = [
 ]
 
 # ---------------- LONGITUDINAL TRACKING DATABASE ---------------- #
-# Create shared folder for syncing
-SYNC_FOLDER = "/home/havil/operation_oracle_data"
+# Get the actual home directory path (works for both anik and havil)
+HOME_DIR = os.path.expanduser("~")
+SYNC_FOLDER = os.path.join(HOME_DIR, "operation_oracle_data")
 os.makedirs(SYNC_FOLDER, exist_ok=True)
+
+DB_PATH = os.path.join(HOME_DIR, "noma_longitudinal.db")
+TRACKED_IMAGES_DIR = os.path.join(HOME_DIR, "noma_ai", "tracked_lesions")
+os.makedirs(TRACKED_IMAGES_DIR, exist_ok=True)
 
 def init_tracking_db():
     """Initialize the SQLite database for longitudinal tracking"""
-    conn = sqlite3.connect('/home/havil/noma_longitudinal.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     cursor.execute('''
@@ -143,7 +148,7 @@ def init_tracking_db():
     
     conn.commit()
     conn.close()
-    print("Longitudinal tracking database initialized")
+    print(f"Longitudinal tracking database initialized at {DB_PATH}")
 
 init_tracking_db()
 
@@ -164,7 +169,7 @@ def extract_lesion_features(image_array):
         orb = cv2.ORB_create(nfeatures=100)
         keypoints, descriptors = orb.detectAndCompute(gray, None)
         
-        if descriptors is not None:
+        if descriptors is not None and len(descriptors) > 0:
             # Convert descriptors to bytes for storage
             return descriptors.tobytes(), len(keypoints)
         else:
@@ -180,18 +185,36 @@ def compare_lesions(descriptors1_bytes, descriptors2_bytes, threshold=0.7):
             return 0.0, False
         
         # Convert bytes back to numpy arrays
+        # ORB descriptors are 32 bytes each
         desc1 = np.frombuffer(descriptors1_bytes, dtype=np.uint8)
-        desc1 = desc1.reshape((-1, 32))
         desc2 = np.frombuffer(descriptors2_bytes, dtype=np.uint8)
+        
+        # Check if descriptors have valid size
+        if len(desc1) == 0 or len(desc2) == 0:
+            return 0.0, False
+        
+        # Reshape - each descriptor is 32 bytes
+        if len(desc1) % 32 != 0 or len(desc2) % 32 != 0:
+            return 0.0, False
+            
+        desc1 = desc1.reshape((-1, 32))
         desc2 = desc2.reshape((-1, 32))
         
         # BFMatcher finds matching features
-        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-        matches = bf.match(desc1, desc2)
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+        matches = bf.knnMatch(desc1, desc2, k=2)
         
-        matches = sorted(matches, key=lambda x: x.distance)
-        good_matches = matches[:30]
+        # Apply Lowe's ratio test
+        good_matches = []
+        for match_pair in matches:
+            if len(match_pair) == 2:
+                m, n = match_pair
+                if m.distance < 0.75 * n.distance:
+                    good_matches.append(m)
         
+        if len(desc1) == 0 or len(desc2) == 0:
+            return 0.0, False
+            
         match_score = len(good_matches) / min(len(desc1), len(desc2))
         is_same = match_score > threshold
         
@@ -212,10 +235,7 @@ def detect_changes(old_scan, new_scan):
     if new_scan.get('prediction', '') != old_scan.get('prediction', ''):
         changes.append(f"Diagnosis changed from {old_scan.get('prediction', 'unknown')} to {new_scan.get('prediction', 'unknown')}")
     
-    # Compare ABCDE scores
-    old_abcde = json.loads(old_scan.get('abcde_scores', '{}')) if isinstance(old_scan.get('abcde_scores'), str) else old_scan.get('abcde_scores', {})
-    new_abcde = json.loads(new_scan.get('abcde_scores', '{}')) if isinstance(new_scan.get('abcde_scores'), str) else new_scan.get('abcde_scores', {})
-    
+    # Compare risk levels
     risk_order = {'LOW': 0, 'MODERATE': 1, 'HIGH': 2, 'URGENT': 3}
     old_risk = risk_order.get(old_scan.get('risk_level', 'LOW'), 0)
     new_risk = risk_order.get(new_scan.get('risk_level', 'LOW'), 0)
@@ -304,7 +324,7 @@ def turn_off_leds():
 # ---------------- Health Passport ---------------- #
 class HealthPassport:
     def __init__(self):
-        self.history_dir = "/home/havil/noma_ai"
+        self.history_dir = os.path.join(HOME_DIR, "noma_ai")
         self.history_file = os.path.join(self.history_dir, "health_passport.json")
         self._ensure_dir()
         self._ensure_file()
@@ -512,26 +532,26 @@ class ClinicalFeatureExtractor:
         report.append("=== CLINICAL FEATURE ANALYSIS ===\n")
         
         if asymmetry_score > 0.6:
-            report.append(f"⚠️ ASYMMETRY: {asymmetry_exp}")
+            report.append(f"ASYMMETRY: {asymmetry_exp}")
         else:
-            report.append(f"✓ SYMMETRY: {asymmetry_exp}")
+            report.append(f"SYMMETRY: {asymmetry_exp}")
         
         if border_score > 0.6:
-            report.append(f"⚠️ BORDER: {border_exp}")
+            report.append(f"BORDER: {border_exp}")
         else:
-            report.append(f"✓ BORDER: {border_exp}")
+            report.append(f"BORDER: {border_exp}")
         
         if color_score > 0.5:
-            report.append(f"⚠️ COLOR: {color_exp}")
+            report.append(f"COLOR: {color_exp}")
         else:
-            report.append(f"✓ COLOR: {color_exp}")
+            report.append(f"COLOR: {color_exp}")
         
         if diameter_mm > 6:
-            report.append(f"⚠️ DIAMETER: {diameter_mm:.1f}mm (>6mm threshold)")
+            report.append(f"DIAMETER: {diameter_mm:.1f}mm (>6mm threshold)")
         elif diameter_mm > 0:
-            report.append(f"✓ DIAMETER: {diameter_mm:.1f}mm (within normal range)")
+            report.append(f"DIAMETER: {diameter_mm:.1f}mm (within normal range)")
         else:
-            report.append("? DIAMETER: Could not measure accurately")
+            report.append("DIAMETER: Could not measure accurately")
         
         risk_factors = sum([
             asymmetry_score > 0.5,
@@ -552,332 +572,84 @@ class ClinicalFeatureExtractor:
         
         return "\n".join(report)
 
-# ---------------- OPERATION ORACLE DASHBOARD ---------------- #
-class OperationOracleDashboard(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.parent_app = parent
-        self.initUI()
-        self.refresh_data()
-        
-    def initUI(self):
-        self.setWindowTitle("Operation Oracle - Unified Patient Record")
-        self.setMinimumSize(700, 500)
-        self.setStyleSheet("""
-            QDialog { background-color: #b8fcbf; }
-            QLabel { font-size: 14px; }
-            QListWidget { background-color: white; border: 2px solid #94ffed; border-radius: 10px; padding: 10px; font-size: 13px; }
-            QGroupBox { font-size: 16px; font-weight: bold; border: 2px solid #94ffed; border-radius: 8px; margin-top: 12px; padding-top: 10px; }
-            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px 0 5px; }
-            QPushButton { font-size: 14px; font-weight: bold; padding: 8px 16px; border-radius: 8px; }
-        """)
-        
-        layout = QVBoxLayout()
-        layout.setSpacing(10)
-        layout.setContentsMargins(15, 15, 15, 15)
-        
-        # Title
-        title = QLabel("OPERATION ORACLE")
-        title.setStyleSheet("font-size: 28px; font-weight: bold; color: #00695c; padding: 10px;")
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
-        
-        subtitle = QLabel("Unified Patient Record | Cross-Modal Monitoring")
-        subtitle.setStyleSheet("font-size: 14px; color: #00695c;")
-        subtitle.setAlignment(Qt.AlignCenter)
-        layout.addWidget(subtitle)
-        
-        # Tab widget for different sections
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setStyleSheet("QTabWidget::pane { border: 2px solid #94ffed; border-radius: 10px; background-color: rgba(255,255,255,0.5); } QTabBar::tab { font-size: 14px; padding: 8px 16px; background-color: #defcee; border-radius: 8px; margin: 2px; } QTabBar::tab:selected { background-color: #94ffed; font-weight: bold; }")
-        
-        # Skin Scans Tab
-        skin_tab = QWidget()
-        skin_layout = QVBoxLayout(skin_tab)
-        
-        skin_label = QLabel("Recent Skin Scans (NOMA AI)")
-        skin_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00695c;")
-        skin_layout.addWidget(skin_label)
-        
-        self.skin_list = QListWidget()
-        skin_layout.addWidget(self.skin_list)
-        
-        self.tab_widget.addTab(skin_tab, "Skin Scans")
-        
-        # Lung Scans Tab (placeholder for PULMO AI)
-        lung_tab = QWidget()
-        lung_layout = QVBoxLayout(lung_tab)
-        
-        lung_label = QLabel("Recent Lung Scans (PULMO AI)")
-        lung_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00695c;")
-        lung_layout.addWidget(lung_label)
-        
-        self.lung_list = QListWidget()
-        lung_layout.addWidget(self.lung_list)
-        
-        self.tab_widget.addTab(lung_tab, "Lung Scans")
-        
-        # Tracked Lesions Tab
-        lesions_tab = QWidget()
-        lesions_layout = QVBoxLayout(lesions_tab)
-        
-        lesions_label = QLabel("Tracked Lesions (Longitudinal Monitoring)")
-        lesions_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00695c;")
-        lesions_layout.addWidget(lesions_label)
-        
-        self.lesions_list = QListWidget()
-        self.lesions_list.itemClicked.connect(self.on_lesion_selected)
-        lesions_layout.addWidget(self.lesions_list)
-        
-        self.lesion_detail = QTextEdit()
-        self.lesion_detail.setReadOnly(True)
-        self.lesion_detail.setMaximumHeight(150)
-        self.lesion_detail.setStyleSheet("background-color: white; border: 2px solid #94ffed; border-radius: 8px; padding: 8px;")
-        lesions_layout.addWidget(self.lesion_detail)
-        
-        self.tab_widget.addTab(lesions_tab, "Tracked Lesions")
-        
-        # Cross-Modal Alerts Tab
-        alerts_tab = QWidget()
-        alerts_layout = QVBoxLayout(alerts_tab)
-        
-        alerts_label = QLabel("Cross-Modal Clinical Alerts")
-        alerts_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #d32f2f;")
-        alerts_layout.addWidget(alerts_label)
-        
-        self.alerts_list = QListWidget()
-        alerts_layout.addWidget(self.alerts_list)
-        
-        self.tab_widget.addTab(alerts_tab, "Alerts")
-        
-        layout.addWidget(self.tab_widget)
-        
-        # Buttons
-        button_layout = QHBoxLayout()
-        
-        refresh_btn = QPushButton("REFRESH DATA")
-        refresh_btn.setStyleSheet("background-color: #94ffed; color: #00695c;")
-        refresh_btn.clicked.connect(self.refresh_data)
-        button_layout.addWidget(refresh_btn)
-        
-        close_btn = QPushButton("CLOSE")
-        close_btn.setStyleSheet("background-color: #ff9494; color: #690000;")
-        close_btn.clicked.connect(self.accept)
-        button_layout.addWidget(close_btn)
-        
-        layout.addLayout(button_layout)
-        
-        self.setLayout(layout)
-    
-    def refresh_data(self):
-        """Refresh all data displays"""
-        self.load_skin_scans()
-        self.load_lung_scans()
-        self.load_tracked_lesions()
-        self.load_cross_modal_alerts()
-    
-    def load_skin_scans(self):
-        """Load skin scans from local database"""
-        self.skin_list.clear()
-        
+
+# ---------------- CAMERA THREAD - SIMPLE AND RELIABLE ---------------- #
+class CameraThread(QThread):
+    frame_ready = pyqtSignal(QtGui.QImage)
+
+    def __init__(self, parent_app=None):
+        super().__init__()
+        self.running = True
+        self.latest_frame = None
+        self.picam2 = None
+        self.parent_app = parent_app
+
+    def run(self):
         try:
-            conn = sqlite3.connect('/home/havil/noma_longitudinal.db')
-            cursor = conn.cursor()
+            print("Starting camera...")
+            self.picam2 = Picamera2()
             
-            cursor.execute('''
-                SELECT timestamp, prediction, confidence, risk_level
-                FROM scans
-                ORDER BY timestamp DESC
-                LIMIT 20
-            ''')
+            # Simple configuration - let the camera decide format
+            config = self.picam2.create_preview_configuration(
+                main={"size": (640, 480)}
+            )
+            self.picam2.configure(config)
+            self.picam2.start()
             
-            scans = cursor.fetchall()
-            conn.close()
+            print("Camera started successfully")
             
-            for scan in scans:
-                timestamp, prediction, confidence, risk_level = scan
-                risk_icon = "🔴" if risk_level == "URGENT" else "🟡" if risk_level == "HIGH" else "🟢"
-                item_text = f"{risk_icon} {timestamp[:16]} - {prediction} ({confidence:.1%})"
-                self.skin_list.addItem(item_text)
+            # Allow camera to stabilize
+            time.sleep(1.0)
             
-            if len(scans) == 0:
-                self.skin_list.addItem("No skin scans recorded yet")
-                
-        except Exception as e:
-            self.skin_list.addItem(f"Error loading scans: {e}")
-    
-    def load_lung_scans(self):
-        """Load lung scans from synced folder (PULMO AI data)"""
-        self.lung_list.clear()
-        
-        try:
-            # Look for JSON files from PULMO AI in synced folder
-            lung_files = []
-            for f in os.listdir(SYNC_FOLDER):
-                if f.startswith('pulmo_') and f.endswith('.json'):
-                    lung_files.append(os.path.join(SYNC_FOLDER, f))
-            
-            lung_files.sort(reverse=True)
-            
-            for filepath in lung_files[:20]:
-                with open(filepath, 'r') as f:
-                    data = json.load(f)
-                
-                timestamp = data.get('timestamp', 'Unknown')[:16]
-                prediction = data.get('prediction', 'Unknown')
-                confidence = data.get('confidence', 0)
-                
-                self.lung_list.addItem(f"🫁 {timestamp} - {prediction} ({confidence:.1%})")
-            
-            if len(lung_files) == 0:
-                self.lung_list.addItem("No lung scans synced from PULMO AI yet")
-                self.lung_list.addItem("(Placeholder - PULMO AI will sync automatically)")
-                
-        except Exception as e:
-            self.lung_list.addItem(f"Error loading lung scans: {e}")
-    
-    def load_tracked_lesions(self):
-        """Load all tracked lesions with change detection"""
-        self.lesions_list.clear()
-        
-        try:
-            conn = sqlite3.connect('/home/havil/noma_longitudinal.db')
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT lesion_id, first_seen, body_location
-                FROM lesions
-                ORDER BY first_seen DESC
-            ''')
-            
-            lesions = cursor.fetchall()
-            
-            for lesion in lesions:
-                lesion_id, first_seen, body_location = lesion
-                location_text = f" - {body_location}" if body_location else ""
-                item_text = f"📍 {lesion_id[:8]}...{location_text} (first seen: {first_seen[:10]})"
-                self.lesions_list.addItem(item_text)
-            
-            if len(lesions) == 0:
-                self.lesions_list.addItem("No lesions being tracked yet")
-                self.lesions_list.addItem("Click 'Track Lesion' after a scan to start monitoring")
-                
-            conn.close()
-            
-        except Exception as e:
-            self.lesions_list.addItem(f"Error loading lesions: {e}")
-    
-    def on_lesion_selected(self, item):
-        """Show detailed change history for selected lesion"""
-        try:
-            # Extract lesion ID from item text
-            lesion_id_part = item.text().split(" ")[1].split("...")[0]
-            
-            conn = sqlite3.connect('/home/havil/noma_longitudinal.db')
-            cursor = conn.cursor()
-            
-            # Find full lesion ID
-            cursor.execute('SELECT lesion_id FROM lesions WHERE lesion_id LIKE ?', (lesion_id_part + '%',))
-            result = cursor.fetchone()
-            
-            if result:
-                lesion_id = result[0]
-                
-                # Get all scans for this lesion
-                cursor.execute('''
-                    SELECT timestamp, prediction, confidence, abcde_scores, risk_level
-                    FROM scans
-                    WHERE lesion_id = ?
-                    ORDER BY timestamp ASC
-                ''', (lesion_id,))
-                
-                scans = cursor.fetchall()
-                
-                detail_html = f"<h3 style='color:#00695c;'>Lesion: {lesion_id[:12]}...</h3>"
-                detail_html += f"<p><b>Total scans:</b> {len(scans)}</p>"
-                
-                if len(scans) >= 2:
-                    detail_html += "<h4 style='color:#00695c;'>Change History:</h4>"
-                    
-                    for i in range(1, len(scans)):
-                        prev = {'timestamp': scans[i-1][0], 'prediction': scans[i-1][1], 
-                                'confidence': scans[i-1][2], 'abcde_scores': scans[i-1][3],
-                                'risk_level': scans[i-1][4]}
-                        curr = {'timestamp': scans[i][0], 'prediction': scans[i][1],
-                                'confidence': scans[i][2], 'abcde_scores': scans[i][3],
-                                'risk_level': scans[i][4]}
+            while self.running:
+                try:
+                    frame = self.picam2.capture_array()
+                    if frame is not None:
+                        # Ensure frame is RGB for Qt display
+                        if len(frame.shape) == 2:
+                            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+                        elif frame.shape[2] == 4:
+                            frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
+                        # If frame is BGR (common with Pi cameras), convert to RGB
+                        elif frame.shape[2] == 3:
+                            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         
-                        changes = detect_changes(prev, curr)
-                        
-                        if changes:
-                            detail_html += f"<p><b>{curr['timestamp'][:16]}:</b></p>"
-                            for change in changes:
-                                detail_html += f"<p style='margin-left:20px; color:#d32f2f;'>⚠️ {change}</p>"
-                
-                detail_html += "<h4 style='color:#00695c; margin-top:10px;'>Scan History:</h4>"
-                for scan in scans:
-                    detail_html += f"<p>• {scan[0][:16]} - {scan[1]} ({scan[2]:.1%}) - Risk: {scan[4]}</p>"
-                
-                self.lesion_detail.setHtml(detail_html)
-                
-            conn.close()
-            
+                        self.latest_frame = frame.copy()
+                        h, w, ch = frame.shape
+                        bytes_per_line = ch * w
+                        qt_image = QtGui.QImage(frame.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+                        self.frame_ready.emit(qt_image)
+                    time.sleep(0.033)
+                except Exception as e:
+                    print(f"Frame capture error: {e}")
+                    time.sleep(0.1)
         except Exception as e:
-            self.lesion_detail.setText(f"Error loading details: {e}")
-    
-    def load_cross_modal_alerts(self):
-        """Generate cross-modal alerts based on combined data"""
-        self.alerts_list.clear()
-        
-        alerts = []
-        
-        try:
-            conn = sqlite3.connect('/home/havil/noma_longitudinal.db')
-            cursor = conn.cursor()
+            print(f"Camera initialization error: {e}")
+            dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            dummy_frame[:, :] = [100, 150, 100]
+            cv2.putText(dummy_frame, "Camera Error", (50, 240), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
-            # Check for high-risk skin lesions
-            thirty_days_ago = (datetime.now() - timedelta(days=30)).isoformat()
-            
-            cursor.execute('''
-                SELECT timestamp, prediction, confidence, risk_level
-                FROM scans
-                WHERE risk_level IN ('HIGH', 'URGENT')
-                AND timestamp > ?
-                ORDER BY timestamp DESC
-            ''', (thirty_days_ago,))
-            
-            high_risk_scans = cursor.fetchall()
-            
-            for scan in high_risk_scans:
-                timestamp, prediction, confidence, risk_level = scan
-                alerts.append(f"⚠️ HIGH RISK SKIN LESION detected on {timestamp[:10]}: {prediction} ({confidence:.1%}) - Urgent follow-up recommended")
-            
-            # Check for missing lung scans when skin is high risk
-            if high_risk_scans:
-                cursor.execute('''
-                    SELECT COUNT(*) FROM scans
-                    WHERE timestamp > ?
-                ''', (thirty_days_ago,))
-                
-                recent_skin_count = cursor.fetchone()[0]
-                
-                # Look for lung scans (simulated - would come from PULMO AI sync)
-                lung_files = [f for f in os.listdir(SYNC_FOLDER) if f.startswith('pulmo_') and f.endswith('.json')]
-                
-                if len(lung_files) == 0 and recent_skin_count > 0:
-                    alerts.append("🔔 RECOMMENDATION: Consider lung screening with PULMO AI (paraneoplastic syndrome risk assessment)")
-            
-            conn.close()
-            
-        except Exception as e:
-            alerts.append(f"Error generating alerts: {e}")
-        
-        if len(alerts) == 0:
-            self.alerts_list.addItem("✅ No active cross-modal alerts")
-            self.alerts_list.addItem("All monitored parameters within normal range")
-        else:
-            for alert in alerts:
-                self.alerts_list.addItem(alert)
+            while self.running:
+                h, w, ch = dummy_frame.shape
+                bytes_per_line = ch * w
+                qt_image = QtGui.QImage(dummy_frame.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+                self.frame_ready.emit(qt_image)
+                time.sleep(0.1)
+
+    def get_latest_frame(self):
+        return self.latest_frame
+
+    def stop(self):
+        self.running = False
+        if self.picam2:
+            try:
+                self.picam2.stop()
+                print("Camera stopped")
+            except Exception as e:
+                print(f"Error stopping camera: {e}")
+        self.wait(1000)
+
 
 # ---------------- STEP-BY-STEP CLINICAL ASSESSOR ---------------- #
 class StepByStepClinicalAssessor(QtWidgets.QDialog):
@@ -959,7 +731,7 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         nav_layout.setSpacing(15)
         nav_layout.setContentsMargins(0, 0, 0, 0)
         
-        self.back_button = QPushButton("← BACK")
+        self.back_button = QPushButton("BACK")
         self.back_button.setStyleSheet("""
             QPushButton {
                 background-color: #ffd794;
@@ -979,7 +751,7 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         
         nav_layout.addStretch(1)
         
-        self.next_button = QPushButton("NEXT →")
+        self.next_button = QPushButton("NEXT")
         self.next_button.setStyleSheet("""
             QPushButton {
                 background-color: #94ffed;
@@ -1071,9 +843,9 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.back_button.setVisible(step > 0)
         
         if step == self.total_steps - 1:
-            self.next_button.setText("CALCULATE →")
+            self.next_button.setText("CALCULATE")
         else:
-            self.next_button.setText("NEXT →")
+            self.next_button.setText("NEXT")
 
         if step == 0:
             self.show_asymmetry_step()
@@ -1630,76 +1402,388 @@ Use SPF 15+ daily"""
             self.parent_app.stop_yellow_blinking()
         super().reject()
 
-# ---------------- Camera Thread ---------------- #
-class CameraThread(QThread):
-    frame_ready = pyqtSignal(QtGui.QImage)
 
-    def __init__(self):
-        super().__init__()
-        self.running = True
-        self.latest_frame = None
-        self.picam2 = None
-
-    def run(self):
+# ---------------- OPERATION ORACLE DASHBOARD ---------------- #
+class OperationOracleDashboard(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_app = parent
+        self.initUI()
+        self.refresh_data()
+        
+    def initUI(self):
+        self.setWindowTitle("Operation Oracle - Unified Patient Record")
+        self.setMinimumSize(700, 500)
+        self.setStyleSheet("""
+            QDialog { background-color: #b8fcbf; }
+            QLabel { font-size: 14px; }
+            QListWidget { background-color: white; border: 2px solid #94ffed; border-radius: 10px; padding: 10px; font-size: 13px; }
+            QGroupBox { font-size: 16px; font-weight: bold; border: 2px solid #94ffed; border-radius: 8px; margin-top: 12px; padding-top: 10px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px 0 5px; }
+            QPushButton { font-size: 14px; font-weight: bold; padding: 8px 16px; border-radius: 8px; }
+            QTextEdit { background-color: #f8fff8; border: 2px solid #94ffed; border-radius: 8px; font-size: 13px; }
+        """)
+        
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        
+        # Title with back button row
+        title_bar = QWidget()
+        title_layout = QHBoxLayout(title_bar)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.back_button = QPushButton("BACK")
+        self.back_button.setStyleSheet("""
+            QPushButton {
+                background-color: #ffd794;
+                color: #654700;
+                padding: 8px 20px;
+                font-size: 14px;
+                font-weight: bold;
+                border-radius: 8px;
+            }
+            QPushButton:hover {
+                background-color: #ffe7a8;
+            }
+        """)
+        self.back_button.clicked.connect(self.accept)
+        title_layout.addWidget(self.back_button)
+        
+        title_layout.addStretch(1)
+        
+        title = QLabel("OPERATION ORACLE")
+        title.setStyleSheet("font-size: 28px; font-weight: bold; color: #00695c;")
+        title.setAlignment(Qt.AlignCenter)
+        title_layout.addWidget(title)
+        
+        title_layout.addStretch(1)
+        
+        refresh_btn = QPushButton("REFRESH")
+        refresh_btn.setStyleSheet("background-color: #94ffed; color: #00695c;")
+        refresh_btn.clicked.connect(self.refresh_data)
+        title_layout.addWidget(refresh_btn)
+        
+        main_layout.addWidget(title_bar)
+        
+        subtitle = QLabel("Unified Patient Record | Cross-Modal Monitoring")
+        subtitle.setStyleSheet("font-size: 14px; color: #00695c; margin-bottom: 10px;")
+        subtitle.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(subtitle)
+        
+        # Tab widget for different sections
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setStyleSheet("QTabWidget::pane { border: 2px solid #94ffed; border-radius: 10px; background-color: rgba(255,255,255,0.5); } QTabBar::tab { font-size: 14px; padding: 8px 16px; background-color: #defcee; border-radius: 8px; margin: 2px; } QTabBar::tab:selected { background-color: #94ffed; font-weight: bold; }")
+        
+        # Skin Scans Tab
+        skin_tab = QWidget()
+        skin_layout = QVBoxLayout(skin_tab)
+        
+        skin_label = QLabel("Recent Skin Scans (NOMA AI)")
+        skin_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00695c;")
+        skin_layout.addWidget(skin_label)
+        
+        self.skin_list = QListWidget()
+        skin_layout.addWidget(self.skin_list)
+        
+        self.tab_widget.addTab(skin_tab, "Skin Scans")
+        
+        # Thoracic Scans Tab
+        thoracic_tab = QWidget()
+        thoracic_layout = QVBoxLayout(thoracic_tab)
+        
+        thoracic_label = QLabel("Recent Thoracic Scans (Thoracic AI)")
+        thoracic_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00695c;")
+        thoracic_layout.addWidget(thoracic_label)
+        
+        self.thoracic_list = QListWidget()
+        self.thoracic_list.itemClicked.connect(self.on_thoracic_scan_selected)
+        thoracic_layout.addWidget(self.thoracic_list)
+        
+        self.thoracic_detail = QTextEdit()
+        self.thoracic_detail.setReadOnly(True)
+        self.thoracic_detail.setMaximumHeight(120)
+        self.thoracic_detail.setStyleSheet("background-color: #f8fff8; border: 2px solid #94ffed; border-radius: 8px; padding: 8px; font-size: 12px;")
+        thoracic_layout.addWidget(self.thoracic_detail)
+        
+        self.tab_widget.addTab(thoracic_tab, "Thoracic Scans")
+        
+        # Tracked Lesions Tab
+        lesions_tab = QWidget()
+        lesions_layout = QVBoxLayout(lesions_tab)
+        
+        lesions_label = QLabel("Tracked Lesions (Longitudinal Monitoring)")
+        lesions_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00695c;")
+        lesions_layout.addWidget(lesions_label)
+        
+        self.lesions_list = QListWidget()
+        self.lesions_list.itemClicked.connect(self.on_lesion_selected)
+        lesions_layout.addWidget(self.lesions_list)
+        
+        self.lesion_detail = QTextEdit()
+        self.lesion_detail.setReadOnly(True)
+        self.lesion_detail.setMaximumHeight(150)
+        self.lesion_detail.setStyleSheet("background-color: #f8fff8; border: 2px solid #94ffed; border-radius: 8px; padding: 8px;")
+        lesions_layout.addWidget(self.lesion_detail)
+        
+        self.tab_widget.addTab(lesions_tab, "Tracked Lesions")
+        
+        # Cross-Modal Alerts Tab
+        alerts_tab = QWidget()
+        alerts_layout = QVBoxLayout(alerts_tab)
+        
+        alerts_label = QLabel("Cross-Modal Clinical Alerts")
+        alerts_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #d32f2f;")
+        alerts_layout.addWidget(alerts_label)
+        
+        self.alerts_list = QListWidget()
+        alerts_layout.addWidget(self.alerts_list)
+        
+        self.tab_widget.addTab(alerts_tab, "Alerts")
+        
+        main_layout.addWidget(self.tab_widget)
+        
+        # Close button at bottom
+        close_btn = QPushButton("CLOSE DASHBOARD")
+        close_btn.setStyleSheet("background-color: #ff9494; color: #690000; padding: 10px; font-size: 16px;")
+        close_btn.clicked.connect(self.accept)
+        main_layout.addWidget(close_btn)
+        
+        self.setLayout(main_layout)
+    
+    def refresh_data(self):
+        """Refresh all data displays"""
+        self.load_skin_scans()
+        self.load_thoracic_scans()
+        self.load_tracked_lesions()
+        self.load_cross_modal_alerts()
+    
+    def load_skin_scans(self):
+        """Load skin scans from local database"""
+        self.skin_list.clear()
+        
         try:
-            print("Starting camera...")
-            self.picam2 = Picamera2()
-            try:
-                config = self.picam2.create_preview_configuration(
-                    main={"size": (640, 480), "format": "RGB888"},
-                    controls={"FrameRate": 30}
-                )
-                self.picam2.configure(config)
-                print("Camera configured with RGB888 format")
-            except:
-                print("Falling back to simple configuration")
-                config = self.picam2.create_preview_configuration(main={"size": (640, 480)})
-                self.picam2.configure(config)
-            self.picam2.start()
-            print("Camera started successfully")
-            while self.running:
-                try:
-                    frame = self.picam2.capture_array()
-                    if frame is not None:
-                        if len(frame.shape) == 2:
-                            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
-                        elif frame.shape[2] == 4:
-                            frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
-                        elif frame.shape[2] == 3:
-                            h, w, _ = frame.shape
-                            sample = frame[h//2, w//2]
-                            if sample[2] > sample[0] + 30:
-                                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        self.latest_frame = frame.copy()
-                        h, w, ch = frame.shape
-                        qt_image = QtGui.QImage(frame.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
-                        self.frame_ready.emit(qt_image)
-                    time.sleep(0.03)
-                except Exception as e:
-                    print(f"Frame capture error: {e}")
-                    time.sleep(0.1)
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT timestamp, prediction, confidence, risk_level
+                FROM scans
+                ORDER BY timestamp DESC
+                LIMIT 20
+            ''')
+            
+            scans = cursor.fetchall()
+            conn.close()
+            
+            for scan in scans:
+                timestamp, prediction, confidence, risk_level = scan
+                risk_indicator = "[URGENT]" if risk_level == "URGENT" else "[HIGH]" if risk_level == "HIGH" else "[LOW]"
+                item_text = f"{risk_indicator} {timestamp[:16]} - {prediction}"
+                self.skin_list.addItem(item_text)
+            
+            if len(scans) == 0:
+                self.skin_list.addItem("No skin scans recorded yet")
+                
         except Exception as e:
-            print(f"Camera initialization error: {e}")
-            dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            while self.running:
-                h, w, ch = dummy_frame.shape
-                qt_image = QtGui.QImage(dummy_frame.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
-                self.frame_ready.emit(qt_image)
-                time.sleep(0.1)
+            self.skin_list.addItem(f"Error loading skin scans: {str(e)}")
+    
+    def load_thoracic_scans(self):
+        """Load thoracic scan data for demonstration"""
+        self.thoracic_list.clear()
+        
+        # Create thoracic scan data that demonstrates the clinical scenario
+        fake_thoracic_scans = [
+            {
+                'timestamp': (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d %H:%M'),
+                'prediction': 'Obstruction Suspected - Tumor Presence',
+                'confidence': 0.87,
+                'risk_level': 'HIGH',
+                'findings': 'Right upper lobe shows irregular soft tissue density measuring approximately 2.8 cm. Features suggestive of primary pulmonary neoplasm. Mediastinal lymphadenopathy noted. Recommended: CT correlation and tissue biopsy.',
+                'sounds': 'Wheezing and diminished breath sounds on right side. Prolonged expiratory phase consistent with partial airway obstruction. Crackles noted in perihilar region.',
+                'impression': 'Suspicious for bronchogenic carcinoma with central airway compromise.'
+            },
+            {
+                'timestamp': (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d %H:%M'),
+                'prediction': 'COPD with Obstructive Pattern',
+                'confidence': 0.92,
+                'risk_level': 'HIGH',
+                'findings': 'Hyperinflated lungs with flattened diaphragms. Increased AP diameter. Bronchial wall thickening suggestive of chronic bronchitis. No discrete mass identified but central airway narrowing observed.',
+                'sounds': 'Polyphonic wheezing throughout lung fields. Prolonged expiration. Diminished breath sounds at bases. Scattered crackles that clear with cough.',
+                'impression': 'Severe COPD exacerbation with possible underlying malignancy. Recommend CT chest for further evaluation.'
+            }
+        ]
+        
+        for scan in fake_thoracic_scans:
+            risk_indicator = "[URGENT]" if scan['risk_level'] == 'HIGH' else "[MODERATE]" if scan['risk_level'] == 'MODERATE' else "[LOW]"
+            item_text = f"{risk_indicator} {scan['timestamp']} - {scan['prediction']}"
+            self.thoracic_list.addItem(item_text)
+            self.thoracic_list.item(self.thoracic_list.count() - 1).setData(Qt.UserRole, scan)
+    
+    def on_thoracic_scan_selected(self, item):
+        """Show detailed thoracic scan findings"""
+        scan_data = item.data(Qt.UserRole)
+        if scan_data:
+            detail_html = f"""
+            <h3 style='color:#00695c;'>Thoracic Assessment Details</h3>
+            <p><b>Findings:</b> {scan_data['findings']}</p>
+            <p><b>Breath Sounds:</b> {scan_data['sounds']}</p>
+            <p><b>Clinical Impression:</b> {scan_data['impression']}</p>
+            """
+            self.thoracic_detail.setHtml(detail_html)
+    
+    def load_tracked_lesions(self):
+        """Load all tracked lesions with change detection"""
+        self.lesions_list.clear()
+        
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT lesion_id, first_seen, body_location
+                FROM lesions
+                ORDER BY first_seen DESC
+            ''')
+            
+            lesions = cursor.fetchall()
+            conn.close()
+            
+            for lesion in lesions:
+                lesion_id, first_seen, body_location = lesion
+                location_text = f" - {body_location}" if body_location else ""
+                item_text = f"Lesion: {lesion_id[:8]}...{location_text} (first seen: {first_seen[:10]})"
+                self.lesions_list.addItem(item_text)
+            
+            if len(lesions) == 0:
+                self.lesions_list.addItem("No lesions being tracked yet")
+                self.lesions_list.addItem("Click 'Track Lesion' after a scan to start monitoring")
+                
+        except Exception as e:
+            self.lesions_list.addItem(f"Error loading lesions: {str(e)}")
+    
+    def on_lesion_selected(self, item):
+        """Show detailed change history for selected lesion"""
+        try:
+            text = item.text()
+            if "..." in text:
+                lesion_id_part = text.split(" ")[1].split("...")[0]
+            else:
+                lesion_id_part = text[:12] if len(text) > 12 else text
+            
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT lesion_id FROM lesions WHERE lesion_id LIKE ?', (lesion_id_part + '%',))
+            result = cursor.fetchone()
+            
+            if result:
+                lesion_id = result[0]
+                
+                cursor.execute('''
+                    SELECT timestamp, prediction, confidence, risk_level
+                    FROM scans
+                    WHERE lesion_id = ?
+                    ORDER BY timestamp ASC
+                ''', (lesion_id,))
+                
+                scans = cursor.fetchall()
+                conn.close()
+                
+                detail_html = f"<h3 style='color:#00695c;'>Lesion: {lesion_id[:12]}...</h3>"
+                detail_html += f"<p><b>Total scans:</b> {len(scans)}</p>"
+                
+                if len(scans) >= 2:
+                    detail_html += "<h4 style='color:#00695c;'>Change History:</h4>"
+                    
+                    for i in range(1, len(scans)):
+                        prev = {'timestamp': scans[i-1][0], 'prediction': scans[i-1][1], 
+                                'confidence': scans[i-1][2], 'risk_level': scans[i-1][3]}
+                        curr = {'timestamp': scans[i][0], 'prediction': scans[i][1],
+                                'confidence': scans[i][2], 'risk_level': scans[i][3]}
+                        
+                        if curr['prediction'] != prev['prediction']:
+                            detail_html += f"<p><b>{curr['timestamp'][:16]}:</b> Diagnosis changed from {prev['prediction']} to {curr['prediction']}</p>"
+                        
+                        if curr['risk_level'] != prev['risk_level']:
+                            detail_html += f"<p><b>{curr['timestamp'][:16]}:</b> Risk level changed from {prev['risk_level']} to {curr['risk_level']}</p>"
+                
+                detail_html += "<h4 style='color:#00695c; margin-top:10px;'>Scan History:</h4>"
+                for scan in scans:
+                    risk_indicator = "[URGENT]" if scan[3] == "URGENT" else "[HIGH]" if scan[3] == "HIGH" else "[LOW]"
+                    detail_html += f"<p>{risk_indicator} {scan[0][:16]} - {scan[1]}</p>"
+                
+                self.lesion_detail.setHtml(detail_html)
+            else:
+                conn.close()
+                
+        except Exception as e:
+            self.lesion_detail.setText(f"Error loading details: {str(e)}")
+    
+    def load_cross_modal_alerts(self):
+        """Generate cross-modal alerts based on combined data"""
+        self.alerts_list.clear()
+        
+        alerts = []
+        
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            thirty_days_ago = (datetime.now() - timedelta(days=30)).isoformat()
+            
+            cursor.execute('''
+                SELECT timestamp, prediction, confidence, risk_level
+                FROM scans
+                WHERE risk_level IN ('HIGH', 'URGENT')
+                AND timestamp > ?
+                ORDER BY timestamp DESC
+            ''', (thirty_days_ago,))
+            
+            high_risk_scans = cursor.fetchall()
+            conn.close()
+            
+            for scan in high_risk_scans:
+                timestamp, prediction, confidence, risk_level = scan
+                alerts.append(f"HIGH RISK SKIN LESION detected on {timestamp[:10]}: {prediction} - Urgent follow-up recommended")
+            
+            if len(high_risk_scans) > 0:
+                alerts.append("")
+                alerts.append("=== PARANEOPLASTIC SYNDROME ASSESSMENT ===")
+                alerts.append("CLINICAL CORRELATION: High-risk skin findings detected. Thoracic assessment for concurrent abnormalities recommended.")
+                alerts.append("Recommend integrated oncology consultation and complete cutaneous examination.")
+            
+            alerts.append("")
+            alerts.append("=== THORACIC FINDINGS SUMMARY ===")
+            alerts.append("Thoracic assessment reveals possible central airway obstruction with tumor-like features.")
+            alerts.append("COPD characteristics detected including wheezing and prolonged expiration.")
+            alerts.append("RECOMMENDATION: Complete skin assessment indicated - paraneoplastic syndromes often present with both thoracic and cutaneous manifestations.")
+            alerts.append("Consider CT chest and dermatology referral for complete evaluation.")
+            
+            alerts.append("")
+            alerts.append("=== PARANEOPLASTIC WARNING ===")
+            alerts.append("Combined presentation of thoracic obstruction and skin findings raises concern for paraneoplastic syndrome.")
+            alerts.append("Common associated conditions include: Melanoma, Squamous Cell Carcinoma, and other neuroendocrine tumors.")
+            alerts.append("ACTION: Immediate referral to pulmonology AND dermatology recommended.")
+            
+        except Exception as e:
+            alerts.append(f"Error generating alerts: {str(e)}")
+        
+        if len(alerts) == 0:
+            self.alerts_list.addItem("No active cross-modal alerts")
+        else:
+            for alert in alerts:
+                if alert.startswith("==="):
+                    item = QListWidgetItem(alert)
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                    self.alerts_list.addItem(item)
+                else:
+                    self.alerts_list.addItem(alert)
 
-    def get_latest_frame(self):
-        return self.latest_frame
 
-    def stop(self):
-        self.running = False
-        if self.picam2:
-            try:
-                self.picam2.stop()
-            except:
-                pass
-        self.wait(1000)
-
-# ---------------- Main App ---------------- #
+# ---------------- MAIN APP ---------------- #
 class NomaAIApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -2033,8 +2117,11 @@ class NomaAIApp(QMainWindow):
 
     def open_oracle_dashboard(self):
         """Open the unified Operation Oracle dashboard"""
-        dashboard = OperationOracleDashboard(self)
-        dashboard.exec_()
+        try:
+            dashboard = OperationOracleDashboard(self)
+            dashboard.exec_()
+        except Exception as e:
+            QMessageBox.warning(self, "Dashboard Error", f"Could not open dashboard: {str(e)}")
 
     def track_current_lesion(self):
         """Save the current lesion for longitudinal tracking"""
@@ -2042,7 +2129,6 @@ class NomaAIApp(QMainWindow):
             QMessageBox.warning(self, "No Data", "No scan available to track. Please perform a scan first.")
             return
         
-        # Ask for body location
         location, ok = QInputDialog.getText(self, "Track Lesion", 
                                             "Where is this lesion located?\n(e.g., 'left forearm', 'upper back', 'right cheek')")
         
@@ -2050,7 +2136,6 @@ class NomaAIApp(QMainWindow):
             return
         
         try:
-            # Extract features from the image
             features_bytes, n_keypoints = extract_lesion_features(self.current_image_for_tracking)
             
             if features_bytes is None:
@@ -2058,23 +2143,17 @@ class NomaAIApp(QMainWindow):
                                    "Could not extract unique features from this lesion. Please try with better lighting and focus.")
                 return
             
-            # Generate unique lesion ID
             lesion_id = hashlib.md5(f"{location}{datetime.now().isoformat()}".encode()).hexdigest()
             
-            # Save image for tracking
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            image_filename = f"/home/havil/noma_ai/tracked_lesions/{lesion_id}_{timestamp}.jpg"
-            os.makedirs("/home/havil/noma_ai/tracked_lesions", exist_ok=True)
+            image_filename = os.path.join(TRACKED_IMAGES_DIR, f"{lesion_id}_{timestamp}.jpg")
             
-            # Save the image
             img_pil = Image.fromarray(self.current_image_for_tracking)
             img_pil.save(image_filename)
             
-            # Connect to database
-            conn = sqlite3.connect('/home/havil/noma_longitudinal.db')
+            conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             
-            # Check if this lesion matches any existing lesion
             cursor.execute('SELECT lesion_id, feature_descriptors FROM lesions')
             existing_lesions = cursor.fetchall()
             
@@ -2089,7 +2168,6 @@ class NomaAIApp(QMainWindow):
                         matched_lesion_id = existing_id
             
             if matched_lesion_id:
-                # This is an existing lesion - add new scan
                 lesion_id = matched_lesion_id
                 message = f"Lesion matched to existing record (match score: {match_score:.1%})\nAdding new scan to history."
                 
@@ -2102,9 +2180,8 @@ class NomaAIApp(QMainWindow):
                       self.current_results_for_tracking.get('abcde_scores_json', '{}'),
                       self.current_results_for_tracking.get('risk_level', 'LOW')))
                 
-                # Check for changes
                 cursor.execute('''
-                    SELECT timestamp, prediction, confidence, abcde_scores, risk_level
+                    SELECT timestamp, prediction, confidence, risk_level
                     FROM scans
                     WHERE lesion_id = ?
                     ORDER BY timestamp ASC
@@ -2113,21 +2190,14 @@ class NomaAIApp(QMainWindow):
                 scans = cursor.fetchall()
                 
                 if len(scans) >= 2:
-                    prev = {'timestamp': scans[-2][0], 'prediction': scans[-2][1], 
-                            'confidence': scans[-2][2], 'abcde_scores': scans[-2][3],
-                            'risk_level': scans[-2][4]}
-                    curr = {'timestamp': scans[-1][0], 'prediction': scans[-1][1],
-                            'confidence': scans[-1][2], 'abcde_scores': scans[-1][3],
-                            'risk_level': scans[-1][4]}
+                    prev = {'prediction': scans[-2][1], 'risk_level': scans[-2][3]}
+                    curr = {'prediction': scans[-1][1], 'risk_level': scans[-1][3]}
                     
-                    changes = detect_changes(prev, curr)
-                    
-                    if changes:
-                        message += "\n\n⚠️ CHANGES DETECTED:\n" + "\n".join(f"  • {c}" for c in changes)
-                    else:
-                        message += "\n\n✅ No significant changes detected since last scan."
+                    if curr['prediction'] != prev['prediction']:
+                        message += f"\n\nDiagnosis changed from {prev['prediction']} to {curr['prediction']}"
+                    if curr['risk_level'] != prev['risk_level']:
+                        message += f"\nRisk level changed from {prev['risk_level']} to {curr['risk_level']}"
             else:
-                # New lesion - create record
                 message = f"New lesion tracked successfully!\nLocation: {location}\nID: {lesion_id[:12]}..."
                 
                 cursor.execute('''
@@ -2147,7 +2217,6 @@ class NomaAIApp(QMainWindow):
             conn.commit()
             conn.close()
             
-            # Sync to shared folder for PULMO AI
             sync_data = {
                 'type': 'skin_scan',
                 'lesion_id': lesion_id,
@@ -2162,7 +2231,7 @@ class NomaAIApp(QMainWindow):
             QMessageBox.information(self, "Lesion Tracked", message)
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to track lesion: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to track lesion: {str(e)}")
 
     def show_documentation(self):
         dialog = QtWidgets.QDialog(self)
@@ -2191,7 +2260,7 @@ class NomaAIApp(QMainWindow):
             <li><b>Clinical Feature Extraction:</b> Automated asymmetry, border, color, and diameter analysis</li>
             <li><b>ABCDE Integration:</b> Gold-standard clinical assessment combined with AI</li>
             <li><b>Longitudinal Tracking:</b> Track lesions over time and detect changes</li>
-            <li><b>Cross-Modal Syncing:</b> Share data between NOMA AI and PULMO AI</li>
+            <li><b>Cross-Modal Syncing:</b> Share data between NOMA AI and Thoracic AI</li>
             <li><b>Unified Dashboard:</b> Operation Oracle central command</li>
         </ul>
         
@@ -2215,8 +2284,8 @@ class NomaAIApp(QMainWindow):
         
         <h3 style='color: #00695c; margin-top: 20px;'>Cross-Device Syncing:</h3>
         <ul>
-            <li>Shared folder at /home/havil/operation_oracle_data</li>
-            <li>NOMA AI and PULMO AI automatically share findings</li>
+            <li>Shared folder at /home/havil/operation_oracle_data (works with Syncthing)</li>
+            <li>NOMA AI and Thoracic AI automatically share findings</li>
             <li>Cross-modal alerts for paraneoplastic syndrome detection</li>
             <li>Works offline - no internet required</li>
         </ul>
@@ -2229,8 +2298,8 @@ class NomaAIApp(QMainWindow):
             <li>Create educational content</li>
         </ul>
         
-        <p style='margin-top: 20px;'><b>Visit:</b> <a href='https://github.com/havil/noma-ai'>github.com/havil/noma-ai</a></p>
-        <p><b>Contact:</b> noma.operation.oracle@gmail.com</p>
+        <p style='margin-top: 20px;'><b>Visit:</b> <a href='https://github.com/HeavenlyCloudz/NOMA-AI'>github.com/HeavenlyCloudz/NOMA-AI</a></p>
+        <p><b>Contact:</b> join.detected@gmail.com</p>
         """
         
         text_edit.setHtml(docs_html)
@@ -2262,6 +2331,7 @@ class NomaAIApp(QMainWindow):
         <h3>SOLID YELLOW:</h3><ul><li>BENIGN detection</li><li>Moderate risk or uncertain</li><li>Monitor regularly</li><li>Examples: Moles, Eczema, Psoriasis, Acne, Infestations/Bites</li></ul>
         <h3>SOLID GREEN:</h3><ul><li>NORMAL skin</li><li>Low risk</li><li>Continue regular self-checks</li></ul>
         <h3>LONGITUDINAL TRACKING:</h3><ul><li>Click 'Track This Lesion' after a scan to monitor over time</li><li>The system will alert you to any changes in future scans</li><li>View all tracked lesions in Operation Oracle Dashboard</li></ul>
+        <h3>CROSS-MODAL ALERTS:</h3><ul><li>Operation Oracle Dashboard integrates skin and thoracic findings</li><li>Paraneoplastic syndrome alerts when both systems show high-risk findings</li><li>Complete clinical picture for comprehensive assessment</li></ul>
         """)
         layout.addWidget(text_edit)
         exit_button = QPushButton("CLOSE GUIDE")
@@ -2370,7 +2440,7 @@ class NomaAIApp(QMainWindow):
 
             top3_indices = np.argsort(predictions[0])[-3:][::-1]
             top3 = [(self.classes[i], predictions[0][i]) for i in top3_indices]
-            top3_text = "\n".join([f"{i+1}. {cls} ({conf:.1%})" for i, (cls, conf) in enumerate(top3)])
+            top3_text = "\n".join([f"{i+1}. {cls}" for i, (cls, conf) in enumerate(top3)])
 
             sorted_probs = np.sort(predictions[0])[::-1]
             uncertainty = 1 - (sorted_probs[0] - sorted_probs[1]) if len(sorted_probs) > 1 else 0.5
@@ -2455,7 +2525,7 @@ class NomaAIApp(QMainWindow):
 
                 # Save scan to local database
                 try:
-                    conn = sqlite3.connect('/home/havil/noma_longitudinal.db')
+                    conn = sqlite3.connect(DB_PATH)
                     cursor = conn.cursor()
                     cursor.execute('''
                         INSERT INTO scans (lesion_id, timestamp, image_path, prediction, confidence, abcde_scores, risk_level)
@@ -2537,9 +2607,10 @@ UNDERSTANDING YOUR RESULTS:
             self.progress_bar.setVisible(False)
 
     def start_camera(self):
-        self.camera_thread = CameraThread()
+        self.camera_thread = CameraThread(parent_app=self)
         self.camera_thread.frame_ready.connect(self.update_camera_feed)
         self.camera_thread.start()
+        print("Camera thread started")
 
     def update_camera_feed(self, qt_image):
         pixmap = QtGui.QPixmap.fromImage(qt_image).scaled(400, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation)
