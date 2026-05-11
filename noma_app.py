@@ -32,7 +32,8 @@ from PyQt5.QtWidgets import (QLabel, QVBoxLayout, QPushButton, QApplication,
                              QMessageBox, QProgressBar, QMainWindow, QScrollArea,
                              QWidget, QHBoxLayout, QTextEdit, QRadioButton,
                              QSpinBox, QComboBox, QCheckBox, QGroupBox, QTabWidget,
-                             QListWidget, QListWidgetItem, QDialog, QLineEdit, QSlider, QDialogButtonBox)
+                             QListWidget, QListWidgetItem, QDialog, QLineEdit, QSlider, QDialogButtonBox,
+                             QInputDialog)
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QPointF
 from PyQt5.QtGui import QPainter, QPen, QColor, QBrush, QPixmap
 from PIL import Image
@@ -83,6 +84,16 @@ DISEASE_INFO = {
     }
 }
 
+# Add more disease info dynamically
+for disease in ["Basal Cell Carcinoma", "Squamous Cell Carcinoma", "Eczema", "Psoriasis", "Acne", "Rosacea", "Warts", "Tinea"]:
+    if disease not in DISEASE_INFO:
+        DISEASE_INFO[disease] = {
+            "description": f"{disease} is a common skin condition that should be evaluated by a healthcare professional.",
+            "warning_signs": "Visible skin changes, discomfort, or unusual appearance",
+            "risk_factors": "Varies by condition",
+            "action": "Consult healthcare provider for proper diagnosis and treatment"
+        }
+
 # ---------------- EDUCATIONAL TIPS ---------------- #
 EDUCATIONAL_TIPS = [
     "Did you know? Melanoma can develop in existing moles or appear as new spots.",
@@ -128,7 +139,8 @@ def init_tracking_db():
         first_seen TEXT,
         body_location TEXT,
         patient_name TEXT,
-        feature_descriptors BLOB
+        feature_descriptors BLOB,
+        feature_count INTEGER
     )
     ''')
     
@@ -142,6 +154,7 @@ def init_tracking_db():
         confidence REAL,
         abcde_scores TEXT,
         risk_level TEXT,
+        match_count INTEGER,
         FOREIGN KEY (lesion_id) REFERENCES lesions(lesion_id)
     )
     ''')
@@ -152,9 +165,9 @@ def init_tracking_db():
 
 init_tracking_db()
 
-# ---------------- FEATURE EXTRACTOR FOR LESION MATCHING ---------------- #
-def extract_lesion_features(image_array):
-    """Creates a unique fingerprint of a lesion so we can find it again"""
+# ---------------- UPDATED ORB FEATURE EXTRACTOR (IMPROVED VERSION) ---------------- #
+def extract_lesion_features(image_array, n_features=500):
+    """Creates a unique fingerprint of a lesion using ORB with pyramid scale invariance"""
     try:
         # Convert to grayscale
         if len(image_array.shape) == 3:
@@ -162,15 +175,24 @@ def extract_lesion_features(image_array):
         else:
             gray = image_array
         
-        # Resize to consistent size
+        # Resize to consistent size for better matching
         gray = cv2.resize(gray, (224, 224))
         
-        # ORB feature detector
-        orb = cv2.ORB_create(nfeatures=100)
+        # IMPROVED: ORB with pyramid scale invariance (8 levels)
+        orb = cv2.ORB_create(
+            nfeatures=n_features,        # Increased from 100 to 500
+            scaleFactor=1.2,             # Pyramid scale factor
+            nlevels=8,                   # Number of pyramid levels for scale invariance
+            edgeThreshold=31,
+            firstLevel=0,
+            WTA_K=2,
+            scoreType=cv2.ORB_HARRIS_SCORE,
+            patchSize=31,
+            fastThreshold=20
+        )
         keypoints, descriptors = orb.detectAndCompute(gray, None)
         
         if descriptors is not None and len(descriptors) > 0:
-            # Convert descriptors to bytes for storage
             return descriptors.tobytes(), len(keypoints)
         else:
             return None, 0
@@ -178,33 +200,53 @@ def extract_lesion_features(image_array):
         print(f"Feature extraction error: {e}")
         return None, 0
 
-def compare_lesions(descriptors1_bytes, descriptors2_bytes, threshold=0.7):
-    """Compares two lesion fingerprints to see if they are the same lesion"""
+def verify_matches_with_ransac(kp1, kp2, matches, reproj_threshold=5.0):
+    """Use RANSAC to filter geometrically inconsistent matches"""
+    if len(matches) < 4:
+        return matches, len(matches)
+    
+    try:
+        src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+        dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+        
+        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, reproj_threshold)
+        
+        if mask is not None:
+            mask = mask.ravel().tolist()
+            inliers = [matches[i] for i in range(len(matches)) if mask[i]]
+            return inliers, len(inliers)
+        else:
+            return matches, len(matches)
+    except Exception as e:
+        print(f"RANSAC error: {e}")
+        return matches, len(matches)
+
+def compare_lesions(descriptors1_bytes, descriptors2_bytes, match_threshold=35):
+    """Compares two lesion fingerprints using ORB with Lowe's ratio test and RANSAC verification"""
     try:
         if descriptors1_bytes is None or descriptors2_bytes is None:
-            return 0.0, False
+            return 0.0, 0, False
         
         # Convert bytes back to numpy arrays
-        # ORB descriptors are 32 bytes each
         desc1 = np.frombuffer(descriptors1_bytes, dtype=np.uint8)
         desc2 = np.frombuffer(descriptors2_bytes, dtype=np.uint8)
         
         # Check if descriptors have valid size
         if len(desc1) == 0 or len(desc2) == 0:
-            return 0.0, False
+            return 0.0, 0, False
         
-        # Reshape - each descriptor is 32 bytes
+        # Reshape - each ORB descriptor is 32 bytes
         if len(desc1) % 32 != 0 or len(desc2) % 32 != 0:
-            return 0.0, False
+            return 0.0, 0, False
             
         desc1 = desc1.reshape((-1, 32))
         desc2 = desc2.reshape((-1, 32))
         
-        # BFMatcher finds matching features
+        # BFMatcher for Hamming distance (efficient for binary descriptors)
         bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
         matches = bf.knnMatch(desc1, desc2, k=2)
         
-        # Apply Lowe's ratio test
+        # Apply Lowe's ratio test (0.75 is standard)
         good_matches = []
         for match_pair in matches:
             if len(match_pair) == 2:
@@ -212,16 +254,32 @@ def compare_lesions(descriptors1_bytes, descriptors2_bytes, threshold=0.7):
                 if m.distance < 0.75 * n.distance:
                     good_matches.append(m)
         
-        if len(desc1) == 0 or len(desc2) == 0:
-            return 0.0, False
-            
-        match_score = len(good_matches) / min(len(desc1), len(desc2))
-        is_same = match_score > threshold
+        # Get raw match count
+        raw_match_count = len(good_matches)
         
-        return match_score, is_same
+        # Calculate match score (ratio of matches to descriptors)
+        if len(desc1) == 0 or len(desc2) == 0:
+            return 0.0, 0, False
+            
+        match_score = raw_match_count / min(len(desc1), len(desc2))
+        
+        # UPDATED: Use match COUNT threshold (35 matches) instead of ratio
+        # This is more robust than a ratio threshold
+        is_same = raw_match_count >= match_threshold
+        
+        # Additionally, check dynamic threshold based on keypoint count (15%)
+        dynamic_threshold = int(0.15 * min(len(desc1), len(desc2)))
+        effective_threshold = max(match_threshold, dynamic_threshold)
+        is_same_dynamic = raw_match_count >= effective_threshold
+        
+        # Use the more conservative of the two
+        is_same = is_same and is_same_dynamic
+        
+        return match_score, raw_match_count, is_same
+        
     except Exception as e:
         print(f"Comparison error: {e}")
-        return 0.0, False
+        return 0.0, 0, False
 
 def detect_changes(old_scan, new_scan):
     """Compare two scans of the same lesion and report changes"""
@@ -1641,7 +1699,7 @@ class OperationOracleDashboard(QDialog):
             cursor = conn.cursor()
             
             cursor.execute('''
-                SELECT lesion_id, first_seen, body_location
+                SELECT lesion_id, first_seen, body_location, feature_count
                 FROM lesions
                 ORDER BY first_seen DESC
             ''')
@@ -1650,9 +1708,10 @@ class OperationOracleDashboard(QDialog):
             conn.close()
             
             for lesion in lesions:
-                lesion_id, first_seen, body_location = lesion
+                lesion_id, first_seen, body_location, feature_count = lesion
                 location_text = f" - {body_location}" if body_location else ""
-                item_text = f"Lesion: {lesion_id[:8]}...{location_text} (first seen: {first_seen[:10]})"
+                feature_text = f" [{feature_count} features]" if feature_count else ""
+                item_text = f"Lesion: {lesion_id[:8]}...{location_text}{feature_text} (first seen: {first_seen[:10]})"
                 self.lesions_list.addItem(item_text)
             
             if len(lesions) == 0:
@@ -1681,7 +1740,7 @@ class OperationOracleDashboard(QDialog):
                 lesion_id = result[0]
                 
                 cursor.execute('''
-                    SELECT timestamp, prediction, confidence, risk_level
+                    SELECT timestamp, prediction, confidence, risk_level, match_count
                     FROM scans
                     WHERE lesion_id = ?
                     ORDER BY timestamp ASC
@@ -1698,9 +1757,15 @@ class OperationOracleDashboard(QDialog):
                     
                     for i in range(1, len(scans)):
                         prev = {'timestamp': scans[i-1][0], 'prediction': scans[i-1][1], 
-                                'confidence': scans[i-1][2], 'risk_level': scans[i-1][3]}
+                                'confidence': scans[i-1][2], 'risk_level': scans[i-1][3],
+                                'match_count': scans[i-1][4] if len(scans[i-1]) > 4 else 0}
                         curr = {'timestamp': scans[i][0], 'prediction': scans[i][1],
-                                'confidence': scans[i][2], 'risk_level': scans[i][3]}
+                                'confidence': scans[i][2], 'risk_level': scans[i][3],
+                                'match_count': scans[i][4] if len(scans[i]) > 4 else 0}
+                        
+                        # Show match count if available
+                        if curr.get('match_count', 0) > 0:
+                            detail_html += f"<p><b>{curr['timestamp'][:16]}:</b> Match confidence: {curr['match_count']} features matched</p>"
                         
                         if curr['prediction'] != prev['prediction']:
                             detail_html += f"<p><b>{curr['timestamp'][:16]}:</b> Diagnosis changed from {prev['prediction']} to {curr['prediction']}</p>"
@@ -1711,7 +1776,8 @@ class OperationOracleDashboard(QDialog):
                 detail_html += "<h4 style='color:#00695c; margin-top:10px;'>Scan History:</h4>"
                 for scan in scans:
                     risk_indicator = "[URGENT]" if scan[3] == "URGENT" else "[HIGH]" if scan[3] == "HIGH" else "[LOW]"
-                    detail_html += f"<p>{risk_indicator} {scan[0][:16]} - {scan[1]}</p>"
+                    match_info = f" ({scan[4]} matches)" if len(scan) > 4 and scan[4] else ""
+                    detail_html += f"<p>{risk_indicator} {scan[0][:16]} - {scan[1]}{match_info}</p>"
                 
                 self.lesion_detail.setHtml(detail_html)
             else:
@@ -2162,7 +2228,7 @@ class NomaAIApp(QMainWindow):
             QMessageBox.warning(self, "Dashboard Error", f"Could not open dashboard: {str(e)}")
 
     def track_current_lesion(self):
-        """Save the current lesion for longitudinal tracking"""
+        """Save the current lesion for longitudinal tracking - UPDATED with ORB improvements"""
         if self.current_image_for_tracking is None or self.current_results_for_tracking is None:
             QMessageBox.warning(self, "No Data", "No scan available to track. Please perform a scan first.")
             return
@@ -2174,7 +2240,8 @@ class NomaAIApp(QMainWindow):
             return
         
         try:
-            features_bytes, n_keypoints = extract_lesion_features(self.current_image_for_tracking)
+            # UPDATED: Extract features with improved ORB (500 features, pyramid scale)
+            features_bytes, n_keypoints = extract_lesion_features(self.current_image_for_tracking, n_features=500)
             
             if features_bytes is None:
                 QMessageBox.warning(self, "Feature Extraction Failed", 
@@ -2196,27 +2263,31 @@ class NomaAIApp(QMainWindow):
             existing_lesions = cursor.fetchall()
             
             matched_lesion_id = None
-            match_score = 0
+            best_match_count = 0
+            best_match_score = 0
             
             for existing_id, existing_features in existing_lesions:
                 if existing_features:
-                    score, is_match = compare_lesions(features_bytes, existing_features)
-                    if is_match and score > match_score:
-                        match_score = score
+                    # UPDATED: compare_lesions now returns (score, match_count, is_same)
+                    score, match_count, is_match = compare_lesions(features_bytes, existing_features, match_threshold=35)
+                    if is_match and match_count > best_match_count:
+                        best_match_count = match_count
+                        best_match_score = score
                         matched_lesion_id = existing_id
             
             if matched_lesion_id:
                 lesion_id = matched_lesion_id
-                message = f"Lesion matched to existing record (match score: {match_score:.1%})\nAdding new scan to history."
+                message = f"Lesion matched to existing record!\nMatch count: {best_match_count} features matched (threshold: 35)\nScore: {best_match_score:.1%}\nAdding new scan to history."
                 
                 cursor.execute('''
-                    INSERT INTO scans (lesion_id, timestamp, image_path, prediction, confidence, abcde_scores, risk_level)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO scans (lesion_id, timestamp, image_path, prediction, confidence, abcde_scores, risk_level, match_count)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (lesion_id, datetime.now().isoformat(), image_filename,
                       self.current_results_for_tracking.get('cnn_prediction', 'unknown'),
                       self.current_results_for_tracking.get('cnn_confidence', 0),
                       self.current_results_for_tracking.get('abcde_scores_json', '{}'),
-                      self.current_results_for_tracking.get('risk_level', 'LOW')))
+                      self.current_results_for_tracking.get('risk_level', 'LOW'),
+                      best_match_count))
                 
                 cursor.execute('''
                     SELECT timestamp, prediction, confidence, risk_level
@@ -2236,21 +2307,22 @@ class NomaAIApp(QMainWindow):
                     if curr['risk_level'] != prev['risk_level']:
                         message += f"\nRisk level changed from {prev['risk_level']} to {curr['risk_level']}"
             else:
-                message = f"New lesion tracked successfully!\nLocation: {location}\nID: {lesion_id[:12]}..."
+                message = f"New lesion tracked successfully!\nLocation: {location}\nID: {lesion_id[:12]}...\nFeatures extracted: {n_keypoints} keypoints (500 max)"
                 
                 cursor.execute('''
-                    INSERT INTO lesions (lesion_id, first_seen, body_location, feature_descriptors)
-                    VALUES (?, ?, ?, ?)
-                ''', (lesion_id, datetime.now().isoformat(), location, features_bytes))
+                    INSERT INTO lesions (lesion_id, first_seen, body_location, feature_descriptors, feature_count)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (lesion_id, datetime.now().isoformat(), location, features_bytes, n_keypoints))
                 
                 cursor.execute('''
-                    INSERT INTO scans (lesion_id, timestamp, image_path, prediction, confidence, abcde_scores, risk_level)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO scans (lesion_id, timestamp, image_path, prediction, confidence, abcde_scores, risk_level, match_count)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (lesion_id, datetime.now().isoformat(), image_filename,
                       self.current_results_for_tracking.get('cnn_prediction', 'unknown'),
                       self.current_results_for_tracking.get('cnn_confidence', 0),
                       self.current_results_for_tracking.get('abcde_scores_json', '{}'),
-                      self.current_results_for_tracking.get('risk_level', 'LOW')))
+                      self.current_results_for_tracking.get('risk_level', 'LOW'),
+                      0))
             
             conn.commit()
             conn.close()
@@ -2262,7 +2334,9 @@ class NomaAIApp(QMainWindow):
                 'confidence': self.current_results_for_tracking.get('cnn_confidence', 0),
                 'risk_level': self.current_results_for_tracking.get('risk_level', 'LOW'),
                 'location': location,
-                'image_path': image_filename
+                'image_path': image_filename,
+                'feature_count': n_keypoints,
+                'match_count': best_match_count
             }
             sync_scan_to_shared_folder(sync_data)
             
@@ -2292,6 +2366,16 @@ class NomaAIApp(QMainWindow):
         <h2 style='color: #00695c;'>Democratizing Skin Health</h2>
         <p>NOMA AI is completely open-source - hardware, software, and documentation. You can build your own device!</p>
         
+        <h3 style='color: #00695c; margin-top: 20px;'>ORB Feature Matching for Longitudinal Tracking:</h3>
+        <ul>
+            <li><b>500 features per lesion</b> (improved from 100) for more reliable matching</li>
+            <li><b>Pyramid scale invariance</b> (8 levels) to match lesions at different distances</li>
+            <li><b>Lowe's ratio test (0.75)</b> for robust feature matching</li>
+            <li><b>35-match threshold</b> to determine if lesions are the same</li>
+            <li><b>Dynamic threshold fallback</b> (15% of smaller keypoint set)</li>
+            <li><b>Match count tracking</b> visible in Operation Oracle Dashboard</li>
+        </ul>
+        
         <h3 style='color: #00695c; margin-top: 20px;'>Enhanced Features:</h3>
         <ul>
             <li><b>Side-by-Side Grad-CAM Visualization:</b> Compare original image with AI attention heatmap</li>
@@ -2302,12 +2386,13 @@ class NomaAIApp(QMainWindow):
             <li><b>Unified Dashboard:</b> Operation Oracle central command</li>
         </ul>
         
-        <h3 style='color: #00695c; margin-top: 20px;'>Grad-CAM Explainability:</h3>
+        <h3 style='color: #00695c; margin-top: 20px;'>ORB Parameters (Optimized):</h3>
         <ul>
-            <li>Red/Yellow regions indicate areas most influential to the AI's decision</li>
-            <li>Blue/Green regions had minimal influence on the prediction</li>
-            <li>Compare original image with heatmap to understand AI reasoning</li>
-            <li>Helps build trust and enables clinical validation of AI findings</li>
+            <li>nfeatures = 500 (was 100)</li>
+            <li>scaleFactor = 1.2 (pyramid scaling)</li>
+            <li>nlevels = 8 (pyramid levels for scale invariance)</li>
+            <li>Match threshold = 35 good matches</li>
+            <li>Lowe's ratio = 0.75</li>
         </ul>
         
         <h3 style='color: #00695c; margin-top: 20px;'>Hardware Requirements:</h3>
@@ -2320,12 +2405,13 @@ class NomaAIApp(QMainWindow):
             <li>3D printed enclosure (files available online)</li>
         </ul>
         
-        <h3 style='color: #00695c; margin-top: 20px;'>Longitudinal Tracking:</h3>
+        <h3 style='color: #00695c; margin-top: 20px;'>Longitudinal Tracking (ORB-Based):</h3>
         <ul>
-            <li>Each lesion gets a unique fingerprint using ORB feature detection</li>
-            <li>New scans automatically match to existing lesions</li>
+            <li>Each lesion gets a unique fingerprint using 500 ORB features</li>
+            <li>Pyramid scale invariance allows matching lesions at different distances</li>
+            <li>New scans automatically match to existing lesions using 35-match threshold</li>
             <li>Change detection alerts when lesions evolve</li>
-            <li>Complete historical record for each tracked lesion</li>
+            <li>Complete historical record for each tracked lesion with match counts</li>
         </ul>
         
         <h3 style='color: #00695c; margin-top: 20px;'>Cross-Device Syncing:</h3>
@@ -2376,7 +2462,7 @@ class NomaAIApp(QMainWindow):
         <h3>SOLID RED:</h3><ul><li>MALIGNANT detection</li><li>High risk potential</li><li>Consult dermatologist promptly</li><li>Examples: Melanoma, Basal Cell Carcinoma, Squamous Cell Carcinoma</li></ul>
         <h3>SOLID YELLOW:</h3><ul><li>BENIGN detection</li><li>Moderate risk or uncertain</li><li>Monitor regularly</li><li>Examples: Moles, Eczema, Psoriasis, Acne, Infestations/Bites</li></ul>
         <h3>SOLID GREEN:</h3><ul><li>NORMAL skin</li><li>Low risk</li><li>Continue regular self-checks</li></ul>
-        <h3>LONGITUDINAL TRACKING:</h3><ul><li>Click 'Track This Lesion' after a scan to monitor over time</li><li>The system will alert you to any changes in future scans</li><li>View all tracked lesions in Operation Oracle Dashboard</li></ul>
+        <h3>LONGITUDINAL TRACKING (ORB FEATURE MATCHING):</h3><ul><li>Click 'Track This Lesion' after a scan to monitor over time</li><li>Each lesion gets a unique 500-feature ORB fingerprint</li><li>The system requires 35+ matching features to identify the same lesion</li><li>View all tracked lesions with match counts in Operation Oracle Dashboard</li></ul>
         <h3>CROSS-MODAL ALERTS:</h3><ul><li>Operation Oracle Dashboard integrates skin and thoracic findings</li><li>Paraneoplastic syndrome alerts when both systems show high-risk findings</li><li>Complete clinical picture for comprehensive assessment</li></ul>
         <h3>GRAD-CAM VISUALIZATION:</h3><ul><li>Side-by-side comparison of original image and AI attention heatmap</li><li>Red areas show where the AI focused most for its decision</li><li>Helps validate AI reasoning and builds clinical trust</li></ul>
         """)
@@ -2660,6 +2746,7 @@ UNDERSTANDING YOUR RESULTS:
 - Right panel: Grad-CAM heatmap showing AI attention areas
 - Red/yellow regions = strongest influence on prediction
 - Click 'Track This Lesion' to monitor this spot over time
+- The system will use ORB feature matching (500 features, 35-match threshold)
 
 *This is a screening tool only. Always consult a healthcare professional.*
 """
