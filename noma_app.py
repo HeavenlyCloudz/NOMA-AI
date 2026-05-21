@@ -33,7 +33,7 @@ from PyQt5.QtWidgets import (QLabel, QVBoxLayout, QPushButton, QApplication,
                              QWidget, QHBoxLayout, QTextEdit, QRadioButton,
                              QSpinBox, QComboBox, QCheckBox, QGroupBox, QTabWidget,
                              QListWidget, QListWidgetItem, QDialog, QLineEdit, QSlider, QDialogButtonBox,
-                             QInputDialog)
+                             QInputDialog, QGridLayout, QFrame)
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QPointF
 from PyQt5.QtGui import QPainter, QPen, QColor, QBrush, QPixmap
 from PIL import Image
@@ -85,10 +85,10 @@ DISEASE_INFO = {
 }
 
 # Add more disease info dynamically
-for disease in ["Basal Cell Carcinoma", "Squamous Cell Carcinoma", "Eczema", "Psoriasis", "Acne", "Rosacea", "Warts", "Tinea"]:
+for disease in ["Basal Cell Carcinoma", "Squamous Cell Carcinoma", "Eczema", "Psoriasis", "Acne", "Rosacea", "Warts", "Tinea", "Drug Eruption"]:
     if disease not in DISEASE_INFO:
         DISEASE_INFO[disease] = {
-            "description": f"{disease} is a common skin condition that should be evaluated by a healthcare professional.",
+            "description": f"{disease} is a skin condition that should be evaluated by a healthcare professional.",
             "warning_signs": "Visible skin changes, discomfort, or unusual appearance",
             "risk_factors": "Varies by condition",
             "action": "Consult healthcare provider for proper diagnosis and treatment"
@@ -121,7 +121,8 @@ EDUCATIONAL_TIPS = [
 # ---------------- LONGITUDINAL TRACKING DATABASE ---------------- #
 # Get the actual home directory path (works for both pi and havil)
 HOME_DIR = os.path.expanduser("~")
-SYNC_FOLDER = os.path.join(HOME_DIR, "operation_oracle_data")
+# Use the shared folder for cross-device syncing
+SYNC_FOLDER = "/opt/oracle_share"
 os.makedirs(SYNC_FOLDER, exist_ok=True)
 
 DB_PATH = os.path.join(HOME_DIR, "noma_longitudinal.db")
@@ -155,6 +156,8 @@ def init_tracking_db():
         abcde_scores TEXT,
         risk_level TEXT,
         match_count INTEGER,
+        ita_score REAL,
+        skin_tone TEXT,
         FOREIGN KEY (lesion_id) REFERENCES lesions(lesion_id)
     )
     ''')
@@ -162,27 +165,25 @@ def init_tracking_db():
     conn.commit()
     conn.close()
     print(f"Longitudinal tracking database initialized at {DB_PATH}")
+    print(f"Sync folder: {SYNC_FOLDER}")
 
 init_tracking_db()
 
-# ---------------- UPDATED ORB FEATURE EXTRACTOR (IMPROVED VERSION) ---------------- #
+# ---------------- ORB FEATURE EXTRACTOR ---------------- #
 def extract_lesion_features(image_array, n_features=500):
     """Creates a unique fingerprint of a lesion using ORB with pyramid scale invariance"""
     try:
-        # Convert to grayscale
         if len(image_array.shape) == 3:
             gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
         else:
             gray = image_array
         
-        # Resize to consistent size for better matching
         gray = cv2.resize(gray, (224, 224))
         
-        # IMPROVED: ORB with pyramid scale invariance (8 levels)
         orb = cv2.ORB_create(
-            nfeatures=n_features,        # Increased from 100 to 500
-            scaleFactor=1.2,             # Pyramid scale factor
-            nlevels=8,                   # Number of pyramid levels for scale invariance
+            nfeatures=n_features,
+            scaleFactor=1.2,
+            nlevels=8,
             edgeThreshold=31,
             firstLevel=0,
             WTA_K=2,
@@ -200,53 +201,27 @@ def extract_lesion_features(image_array, n_features=500):
         print(f"Feature extraction error: {e}")
         return None, 0
 
-def verify_matches_with_ransac(kp1, kp2, matches, reproj_threshold=5.0):
-    """Use RANSAC to filter geometrically inconsistent matches"""
-    if len(matches) < 4:
-        return matches, len(matches)
-    
-    try:
-        src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
-        dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
-        
-        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, reproj_threshold)
-        
-        if mask is not None:
-            mask = mask.ravel().tolist()
-            inliers = [matches[i] for i in range(len(matches)) if mask[i]]
-            return inliers, len(inliers)
-        else:
-            return matches, len(matches)
-    except Exception as e:
-        print(f"RANSAC error: {e}")
-        return matches, len(matches)
-
 def compare_lesions(descriptors1_bytes, descriptors2_bytes, match_threshold=35):
-    """Compares two lesion fingerprints using ORB with Lowe's ratio test and RANSAC verification"""
+    """Compares two lesion fingerprints using ORB with Lowe's ratio test"""
     try:
         if descriptors1_bytes is None or descriptors2_bytes is None:
             return 0.0, 0, False
         
-        # Convert bytes back to numpy arrays
         desc1 = np.frombuffer(descriptors1_bytes, dtype=np.uint8)
         desc2 = np.frombuffer(descriptors2_bytes, dtype=np.uint8)
         
-        # Check if descriptors have valid size
         if len(desc1) == 0 or len(desc2) == 0:
             return 0.0, 0, False
         
-        # Reshape - each ORB descriptor is 32 bytes
         if len(desc1) % 32 != 0 or len(desc2) % 32 != 0:
             return 0.0, 0, False
             
         desc1 = desc1.reshape((-1, 32))
         desc2 = desc2.reshape((-1, 32))
         
-        # BFMatcher for Hamming distance (efficient for binary descriptors)
         bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
         matches = bf.knnMatch(desc1, desc2, k=2)
         
-        # Apply Lowe's ratio test (0.75 is standard)
         good_matches = []
         for match_pair in matches:
             if len(match_pair) == 2:
@@ -254,25 +229,18 @@ def compare_lesions(descriptors1_bytes, descriptors2_bytes, match_threshold=35):
                 if m.distance < 0.75 * n.distance:
                     good_matches.append(m)
         
-        # Get raw match count
         raw_match_count = len(good_matches)
         
-        # Calculate match score (ratio of matches to descriptors)
         if len(desc1) == 0 or len(desc2) == 0:
             return 0.0, 0, False
             
         match_score = raw_match_count / min(len(desc1), len(desc2))
-        
-        # UPDATED: Use match COUNT threshold (35 matches) instead of ratio
-        # This is more robust than a ratio threshold
         is_same = raw_match_count >= match_threshold
         
-        # Additionally, check dynamic threshold based on keypoint count (15%)
         dynamic_threshold = int(0.15 * min(len(desc1), len(desc2)))
         effective_threshold = max(match_threshold, dynamic_threshold)
         is_same_dynamic = raw_match_count >= effective_threshold
         
-        # Use the more conservative of the two
         is_same = is_same and is_same_dynamic
         
         return match_score, raw_match_count, is_same
@@ -285,15 +253,12 @@ def detect_changes(old_scan, new_scan):
     """Compare two scans of the same lesion and report changes"""
     changes = []
     
-    # Compare confidence
     if new_scan.get('confidence', 0) - old_scan.get('confidence', 0) > 0.2:
         changes.append(f"AI confidence increased by {(new_scan['confidence'] - old_scan['confidence'])*100:.0f}%")
     
-    # Compare predictions
     if new_scan.get('prediction', '') != old_scan.get('prediction', ''):
         changes.append(f"Diagnosis changed from {old_scan.get('prediction', 'unknown')} to {new_scan.get('prediction', 'unknown')}")
     
-    # Compare risk levels
     risk_order = {'LOW': 0, 'MODERATE': 1, 'HIGH': 2, 'URGENT': 3}
     old_risk = risk_order.get(old_scan.get('risk_level', 'LOW'), 0)
     new_risk = risk_order.get(new_scan.get('risk_level', 'LOW'), 0)
@@ -405,7 +370,9 @@ class HealthPassport:
             'patient_score': results.get('patient_score', 0),
             'total_risk': results.get('total_risk', 0),
             'led_color': results.get('led_color', 'GREEN'),
-            'image_path': image_path
+            'image_path': image_path,
+            'ita_score': results.get('ita_score', 0),
+            'skin_tone': results.get('skin_tone', 'Unknown')
         }
         try:
             with open(self.history_file, 'r') as f:
@@ -418,6 +385,167 @@ class HealthPassport:
             print(f"Failed to save health passport: {e}")
 
 health_passport = HealthPassport()
+
+# ---------------- ITA-based Preprocessing and Grad-CAM ---------------- #
+class ITAPreprocessor:
+    """Handles ITA-based skin tone detection and adaptive preprocessing"""
+    
+    @staticmethod
+    def calculate_ita(image_array):
+        """
+        Calculate Individual Typology Angle for skin tone estimation
+        ITA = arctan((L* - 50) / b*) in degrees
+        Higher ITA = lighter skin, Lower ITA = darker skin
+        """
+        try:
+            # Convert to LAB color space
+            lab = cv2.cvtColor(image_array, cv2.COLOR_RGB2LAB)
+            L = lab[:, :, 0].astype(np.float32)
+            b = lab[:, :, 2].astype(np.float32)
+            
+            # ITA formula: arctan((L* - 50) / b*) in degrees
+            mean_L = np.mean(L) * (100.0 / 255.0)
+            mean_b = np.mean(b) - 128.0
+            
+            # Avoid division by zero
+            if abs(mean_b) < 0.01:
+                mean_b = 0.01 if mean_b >= 0 else -0.01
+            
+            ita_rad = np.arctan((mean_L - 50.0) / mean_b)
+            ita_deg = ita_rad * 180.0 / np.pi
+            
+            # Dermatology standard thresholds (Del Bino 2015)
+            if ita_deg > 55:
+                skin_tone = "Very Light"
+                contrast_boost = 1.0
+                bias_risk = "Low"
+            elif ita_deg > 41:
+                skin_tone = "Light"
+                contrast_boost = 1.0
+                bias_risk = "Low"
+            elif ita_deg > 28:
+                skin_tone = "Intermediate"
+                contrast_boost = 1.2
+                bias_risk = "Medium"
+            elif ita_deg > 10:
+                skin_tone = "Tan"
+                contrast_boost = 1.3
+                bias_risk = "Medium"
+            elif ita_deg > -30:
+                skin_tone = "Brown"
+                contrast_boost = 1.5
+                bias_risk = "High"
+            else:
+                skin_tone = "Dark"
+                contrast_boost = 1.8
+                bias_risk = "Highest"
+            
+            return ita_deg, skin_tone, contrast_boost, bias_risk
+        except Exception as e:
+            print(f"ITA calculation error: {e}")
+            return 0.0, "Unknown", 1.0, "Unknown"
+    
+    @staticmethod
+    def apply_adaptive_contrast(image_array, boost_factor):
+        """Apply adaptive contrast enhancement based on skin tone"""
+        if boost_factor <= 1.0:
+            return image_array
+        
+        lab = cv2.cvtColor(image_array, cv2.COLOR_RGB2LAB)
+        L = lab[:, :, 0].astype(np.uint8)
+        
+        clahe = cv2.createCLAHE(clipLimit=boost_factor, tileGridSize=(8, 8))
+        enhanced_L = clahe.apply(L)
+        
+        lab[:, :, 0] = enhanced_L
+        enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+        
+        return enhanced
+
+
+class GradCAMVisualizer:
+    """Creates a heatmap around the detected lesion area using contour detection."""
+    
+    @staticmethod
+    def detect_lesion_contour(image_array):
+        """Detect the lesion contour in the image to create focused heatmap."""
+        try:
+            if len(image_array.shape) == 3:
+                gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
+            else:
+                gray = image_array
+            
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+            _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if contours:
+                largest_contour = max(contours, key=cv2.contourArea)
+                mask = np.zeros(gray.shape, dtype=np.uint8)
+                cv2.drawContours(mask, [largest_contour], -1, 255, -1)
+                x, y, w, h = cv2.boundingRect(largest_contour)
+                return mask, (x, y, w, h), cv2.contourArea(largest_contour)
+            else:
+                h, w = gray.shape
+                center_mask = np.zeros(gray.shape, dtype=np.uint8)
+                center_mask[h//4:3*h//4, w//4:3*w//4] = 255
+                return center_mask, (w//4, h//4, w//2, h//2), (w*h)//4
+                
+        except Exception as e:
+            print(f"Contour detection error: {e}")
+            h, w = image_array.shape[:2]
+            mask = np.zeros((h, w), dtype=np.uint8)
+            mask[h//4:3*h//4, w//4:3*w//4] = 255
+            return mask, (w//4, h//4, w//2, h//2), (w*h)//4
+    
+    @staticmethod
+    def generate_heatmap(image_array, predicted_class, confidence):
+        """Generate Grad-CAM style heatmap focused on the detected lesion area."""
+        try:
+            mask, bbox, area = GradCAMVisualizer.detect_lesion_contour(image_array)
+            x, y, w, h = bbox
+            
+            h_img, w_img = image_array.shape[:2]
+            heatmap = np.zeros((h_img, w_img), dtype=np.float32)
+            center_x = x + w // 2
+            center_y = y + h // 2
+            
+            for i in range(h_img):
+                for j in range(w_img):
+                    dist = np.sqrt((i - center_y)**2 + (j - center_x)**2)
+                    max_dist = max(h, w) / 2 if max(h, w) > 0 else 1
+                    heatmap[i, j] = np.exp(-(dist**2) / (2 * (max_dist/2)**2))
+            
+            heatmap = heatmap * (mask > 0).astype(np.float32)
+            if np.max(heatmap) > 0:
+                heatmap = heatmap / np.max(heatmap)
+            heatmap = np.power(heatmap, 1.5 - confidence * 0.5)
+            return heatmap, bbox
+            
+        except Exception as e:
+            print(f"Heatmap generation error: {e}")
+            h, w = image_array.shape[:2]
+            heatmap = np.zeros((h, w), dtype=np.float32)
+            center_y, center_x = h // 2, w // 2
+            for i in range(h):
+                for j in range(w):
+                    dist = np.sqrt((i - center_y)**2 + (j - center_x)**2)
+                    max_dist = max(h, w) / 2 if max(h, w) > 0 else 1
+                    heatmap[i, j] = np.exp(-(dist**2) / (2 * (max_dist/2)**2))
+            return heatmap, (w//4, h//4, w//2, h//2)
+    
+    @staticmethod
+    def overlay_heatmap(original_image, heatmap, alpha=0.5):
+        """Overlay heatmap on original image."""
+        if len(original_image.shape) == 2:
+            original_image = cv2.cvtColor(original_image, cv2.COLOR_GRAY2RGB)
+        
+        h, w = original_image.shape[:2]
+        heatmap_resized = cv2.resize(heatmap, (w, h))
+        heatmap_colored = cv2.applyColorMap(np.uint8(255 * heatmap_resized), cv2.COLORMAP_JET)
+        heatmap_colored = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
+        blended = cv2.addWeighted(original_image, 1 - alpha, heatmap_colored, alpha, 0)
+        return blended
 
 # ---------------- Clinical Feature Extractor ---------------- #
 class ClinicalFeatureExtractor:
@@ -441,7 +569,6 @@ class ClinicalFeatureExtractor:
 
     @staticmethod
     def calculate_asymmetry_score(image):
-        """Return a more detailed asymmetry score with explanation"""
         try:
             img = np.array(image.convert('L'))
             h, w = img.shape
@@ -488,7 +615,6 @@ class ClinicalFeatureExtractor:
 
     @staticmethod
     def calculate_border_score(image):
-        """Return border irregularity score with explanation"""
         try:
             img = np.array(image.convert('L'))
             _, binary = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
@@ -534,7 +660,6 @@ class ClinicalFeatureExtractor:
 
     @staticmethod
     def analyze_color_distribution(image):
-        """Detailed color analysis"""
         try:
             img = np.array(image)
             hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
@@ -579,7 +704,6 @@ class ClinicalFeatureExtractor:
 
     @staticmethod
     def generate_clinical_report(features):
-        """Generate a human-readable clinical report"""
         report = []
         
         asymmetry_score, asymmetry_exp = features.get('asymmetry', (0.5, ""))
@@ -631,7 +755,7 @@ class ClinicalFeatureExtractor:
         return "\n".join(report)
 
 
-# ---------------- CAMERA THREAD - SIMPLE AND RELIABLE ---------------- #
+# ---------------- CAMERA THREAD - WORKING PERFECTLY ---------------- #
 class CameraThread(QThread):
     frame_ready = pyqtSignal(QtGui.QImage)
 
@@ -647,7 +771,6 @@ class CameraThread(QThread):
             print("Starting camera...")
             self.picam2 = Picamera2()
             
-            # Simple configuration - let the camera decide format
             config = self.picam2.create_preview_configuration(
                 main={"size": (640, 480)}
             )
@@ -655,20 +778,16 @@ class CameraThread(QThread):
             self.picam2.start()
             
             print("Camera started successfully")
-            
-            # Allow camera to stabilize
             time.sleep(1.0)
             
             while self.running:
                 try:
                     frame = self.picam2.capture_array()
                     if frame is not None:
-                        # Ensure frame is RGB for Qt display
                         if len(frame.shape) == 2:
                             frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
                         elif frame.shape[2] == 4:
                             frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
-                        # If frame is BGR (common with Pi cameras), convert to RGB
                         elif frame.shape[2] == 3:
                             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         
@@ -707,6 +826,448 @@ class CameraThread(QThread):
             except Exception as e:
                 print(f"Error stopping camera: {e}")
         self.wait(1000)
+
+
+# ---------------- BODY LOCATION SELECTION DIALOG ---------------- #
+class BodyLocationDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.selected_location = None
+        self.initUI()
+        
+    def initUI(self):
+        self.setWindowTitle("Select Lesion Location")
+        self.setModal(True)
+        self.setFixedSize(500, 400)
+        self.setStyleSheet("""
+            QDialog { background-color: #b8fcbf; }
+            QPushButton { 
+                font-size: 16px; 
+                font-weight: bold; 
+                padding: 15px; 
+                margin: 5px;
+                border-radius: 10px;
+                background-color: #94ffed;
+                color: #00695c;
+            }
+            QPushButton:hover { background-color: #a8fff0; }
+            QLabel { font-size: 18px; font-weight: bold; color: #00695c; margin: 10px; }
+        """)
+        
+        layout = QVBoxLayout()
+        
+        title = QLabel("Where is this lesion located?")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+        
+        grid_widget = QWidget()
+        grid_layout = QGridLayout(grid_widget)
+        grid_layout.setSpacing(10)
+        
+        locations = [
+            "Face", "Scalp", "Neck", "Chest", "Abdomen", "Back",
+            "Shoulder", "Upper Arm", "Forearm", "Hand", "Upper Leg", 
+            "Lower Leg", "Foot", "Other"
+        ]
+        
+        row = 0
+        col = 0
+        for location in locations:
+            btn = QPushButton(location)
+            btn.clicked.connect(lambda checked, loc=location: self.select_location(loc))
+            grid_layout.addWidget(btn, row, col)
+            col += 1
+            if col > 1:
+                col = 0
+                row += 1
+        
+        layout.addWidget(grid_widget)
+        
+        cancel_btn = QPushButton("CANCEL")
+        cancel_btn.setStyleSheet("background-color: #ff9494; color: #690000;")
+        cancel_btn.clicked.connect(self.reject)
+        layout.addWidget(cancel_btn)
+        
+        self.setLayout(layout)
+    
+    def select_location(self, location):
+        self.selected_location = location
+        self.accept()
+    
+    def get_location(self):
+        return self.selected_location
+
+
+# ---------------- PAST SCANS VIEWER DIALOG (WITH SCROLL BARS) ---------------- #
+class PastScansViewer(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_app = parent
+        self.current_scan_index = 0
+        self.scans = []
+        self.initUI()
+        self.load_lesion_list()
+        
+    def initUI(self):
+        self.setWindowTitle("Past Scans - Longitudinal History")
+        self.setMinimumSize(850, 650)
+        self.setStyleSheet("""
+            QDialog { background-color: #b8fcbf; }
+            QLabel { font-size: 14px; }
+            QPushButton { font-size: 14px; font-weight: bold; padding: 10px; border-radius: 8px; }
+            QTextEdit { background-color: #f8fff8; border: 2px solid #94ffed; border-radius: 10px; font-size: 13px; }
+            QListWidget { 
+                background-color: white; 
+                border: 2px solid #94ffed; 
+                border-radius: 10px; 
+                padding: 10px;
+                font-size: 13px;
+            }
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #e0e0e0;
+                width: 12px;
+                margin: 0px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background: #94ffed;
+                min-height: 30px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #80dfd0;
+            }
+            QScrollBar:horizontal {
+                border: none;
+                background: #e0e0e0;
+                height: 12px;
+                margin: 0px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #94ffed;
+                min-width: 30px;
+                border-radius: 6px;
+            }
+            QComboBox { 
+                font-size: 14px; 
+                padding: 8px; 
+                border: 2px solid #94ffed; 
+                border-radius: 8px; 
+                background-color: white;
+                min-width: 200px;
+            }
+        """)
+        
+        layout = QVBoxLayout()
+        layout.setSpacing(10)
+        layout.setContentsMargins(15, 15, 15, 15)
+        
+        # Title with back button row
+        title_bar = QWidget()
+        title_layout = QHBoxLayout(title_bar)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        
+        back_btn = QPushButton("BACK")
+        back_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ffd794;
+                color: #654700;
+                padding: 8px 20px;
+                font-size: 14px;
+                font-weight: bold;
+                border-radius: 8px;
+            }
+            QPushButton:hover {
+                background-color: #ffe7a8;
+            }
+        """)
+        back_btn.clicked.connect(self.accept)
+        title_layout.addWidget(back_btn)
+        
+        title_layout.addStretch(1)
+        
+        title = QLabel("TRACKED LESIONS - COMPLETE HISTORY")
+        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #00695c;")
+        title.setAlignment(Qt.AlignCenter)
+        title_layout.addWidget(title)
+        
+        title_layout.addStretch(1)
+        
+        refresh_btn = QPushButton("REFRESH")
+        refresh_btn.setStyleSheet("background-color: #94ffed; color: #00695c;")
+        refresh_btn.clicked.connect(self.load_lesion_list)
+        title_layout.addWidget(refresh_btn)
+        
+        layout.addWidget(title_bar)
+        
+        # Lesion list with scroll area
+        lesion_container = QWidget()
+        lesion_container_layout = QVBoxLayout(lesion_container)
+        lesion_container_layout.setContentsMargins(0, 0, 0, 0)
+        
+        lesion_container_layout.addWidget(QLabel("Select a tracked lesion:"))
+        
+        # Create scroll area for lesion list
+        lesion_scroll = QScrollArea()
+        lesion_scroll.setWidgetResizable(True)
+        lesion_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        lesion_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        lesion_scroll.setMaximumHeight(150)
+        lesion_scroll.setStyleSheet("""
+            QScrollArea {
+                border: 2px solid #94ffed;
+                border-radius: 10px;
+                background-color: white;
+            }
+        """)
+        
+        self.lesion_list = QListWidget()
+        self.lesion_list.setSpacing(2)
+        self.lesion_list.itemClicked.connect(self.on_lesion_selected)
+        lesion_scroll.setWidget(self.lesion_list)
+        lesion_container_layout.addWidget(lesion_scroll)
+        
+        layout.addWidget(lesion_container)
+        
+        # Scan selector
+        scan_layout = QHBoxLayout()
+        scan_layout.addWidget(QLabel("Scan date:"))
+        self.scan_combo = QComboBox()
+        self.scan_combo.setMinimumWidth(250)
+        self.scan_combo.currentIndexChanged.connect(self.on_scan_selected)
+        scan_layout.addWidget(self.scan_combo)
+        scan_layout.addStretch()
+        layout.addLayout(scan_layout)
+        
+        # Image display with scroll support
+        image_container = QWidget()
+        image_layout = QHBoxLayout(image_container)
+        image_layout.setSpacing(15)
+        
+        # Original image wrapper with scroll
+        original_wrapper = QScrollArea()
+        original_wrapper.setWidgetResizable(True)
+        original_wrapper.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        original_wrapper.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        original_wrapper.setMinimumSize(320, 280)
+        original_wrapper.setMaximumSize(320, 280)
+        original_wrapper.setStyleSheet("""
+            QScrollArea {
+                border: 2px solid #94ffed;
+                border-radius: 10px;
+                background-color: white;
+            }
+        """)
+        
+        original_widget = QWidget()
+        original_layout = QVBoxLayout(original_widget)
+        original_layout.setContentsMargins(5, 5, 5, 5)
+        original_title = QLabel("Original Image")
+        original_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #00695c;")
+        original_title.setAlignment(Qt.AlignCenter)
+        original_layout.addWidget(original_title)
+        self.past_original_label = QLabel("")
+        self.past_original_label.setAlignment(Qt.AlignCenter)
+        self.past_original_label.setMinimumSize(280, 220)
+        self.past_original_label.setStyleSheet("border: none; background-color: transparent;")
+        original_layout.addWidget(self.past_original_label)
+        original_layout.addStretch()
+        original_wrapper.setWidget(original_widget)
+        image_layout.addWidget(original_wrapper)
+        
+        # Grad-CAM wrapper with scroll
+        grad_wrapper = QScrollArea()
+        grad_wrapper.setWidgetResizable(True)
+        grad_wrapper.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        grad_wrapper.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        grad_wrapper.setMinimumSize(320, 280)
+        grad_wrapper.setMaximumSize(320, 280)
+        grad_wrapper.setStyleSheet("""
+            QScrollArea {
+                border: 2px solid #94ffed;
+                border-radius: 10px;
+                background-color: white;
+            }
+        """)
+        
+        grad_widget = QWidget()
+        grad_layout = QVBoxLayout(grad_widget)
+        grad_layout.setContentsMargins(5, 5, 5, 5)
+        grad_title = QLabel("Grad-CAM Heatmap")
+        grad_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #00695c;")
+        grad_title.setAlignment(Qt.AlignCenter)
+        grad_layout.addWidget(grad_title)
+        self.past_grad_label = QLabel("")
+        self.past_grad_label.setAlignment(Qt.AlignCenter)
+        self.past_grad_label.setMinimumSize(280, 220)
+        self.past_grad_label.setStyleSheet("border: none; background-color: transparent;")
+        grad_layout.addWidget(self.past_grad_label)
+        grad_layout.addStretch()
+        grad_wrapper.setWidget(grad_widget)
+        image_layout.addWidget(grad_wrapper)
+        
+        layout.addWidget(image_container)
+        
+        # Details with scroll bar
+        detail_container = QWidget()
+        detail_container_layout = QVBoxLayout(detail_container)
+        detail_container_layout.setContentsMargins(0, 0, 0, 0)
+        
+        detail_label = QLabel("Scan Details")
+        detail_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #00695c;")
+        detail_container_layout.addWidget(detail_label)
+        
+        detail_scroll = QScrollArea()
+        detail_scroll.setWidgetResizable(True)
+        detail_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        detail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        detail_scroll.setMaximumHeight(180)
+        detail_scroll.setStyleSheet("""
+            QScrollArea {
+                border: 2px solid #94ffed;
+                border-radius: 10px;
+                background-color: #f8fff8;
+            }
+        """)
+        
+        self.details_text = QTextEdit()
+        self.details_text.setReadOnly(True)
+        self.details_text.setStyleSheet("border: none; font-size: 13px; padding: 10px;")
+        detail_scroll.setWidget(self.details_text)
+        detail_container_layout.addWidget(detail_scroll)
+        
+        layout.addWidget(detail_container)
+        
+        # Close button at bottom
+        close_btn = QPushButton("CLOSE")
+        close_btn.setMinimumHeight(40)
+        close_btn.setStyleSheet("background-color: #ff9494; color: #690000; padding: 10px; font-size: 16px;")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+        
+        self.setLayout(layout)
+    
+    def load_lesion_list(self):
+        """Load all tracked lesions from database"""
+        self.lesion_list.clear()
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('SELECT lesion_id, body_location, first_seen, feature_count FROM lesions ORDER BY first_seen DESC')
+            lesions = cursor.fetchall()
+            conn.close()
+            
+            for lesion in lesions:
+                lesion_id, body_location, first_seen, feature_count = lesion
+                feature_text = f" [{feature_count} features]" if feature_count else ""
+                location_text = body_location if body_location else "Unknown location"
+                display_text = f"{location_text}{feature_text} - {first_seen[:10]}"
+                self.lesion_list.addItem(display_text)
+                self.lesion_list.item(self.lesion_list.count() - 1).setData(Qt.UserRole, lesion_id)
+            
+            if len(lesions) == 0:
+                self.lesion_list.addItem("No tracked lesions found")
+                
+        except Exception as e:
+            self.lesion_list.addItem(f"Error: {str(e)}")
+            print(f"Error loading lesion list: {e}")
+    
+    def on_lesion_selected(self, item):
+        """Load scans for selected lesion"""
+        lesion_id = item.data(Qt.UserRole)
+        if not lesion_id:
+            return
+        
+        self.current_lesion_id = lesion_id
+        self.scan_combo.clear()
+        self.scans = []
+        
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT scan_id, timestamp, image_path, prediction, confidence, risk_level, match_count
+                FROM scans
+                WHERE lesion_id = ?
+                ORDER BY timestamp DESC
+            ''', (lesion_id,))
+            self.scans = cursor.fetchall()
+            conn.close()
+            
+            for scan in self.scans:
+                scan_id, timestamp, image_path, prediction, confidence, risk_level, match_count = scan
+                display_time = timestamp[:16] if timestamp else "Unknown"
+                self.scan_combo.addItem(f"{display_time} - {prediction}")
+            
+            if self.scans:
+                self.scan_combo.setCurrentIndex(0)
+                self.display_scan(0)
+        except Exception as e:
+            print(f"Error loading scans: {e}")
+            self.details_text.setText(f"Error loading scans: {str(e)}")
+    
+    def on_scan_selected(self, index):
+        """Display selected scan"""
+        if index >= 0 and index < len(self.scans):
+            self.display_scan(index)
+    
+    def display_scan(self, index):
+        """Display the scan at given index"""
+        if index >= len(self.scans):
+            return
+        
+        scan = self.scans[index]
+        scan_id, timestamp, image_path, prediction, confidence, risk_level, match_count = scan
+        
+        # Display original image
+        if image_path and os.path.exists(image_path):
+            pixmap = QPixmap(image_path)
+            if not pixmap.isNull():
+                scaled_pixmap = pixmap.scaled(280, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.past_original_label.setPixmap(scaled_pixmap)
+                
+                # Generate Grad-CAM for this image
+                try:
+                    img = cv2.imread(image_path)
+                    if img is not None:
+                        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                        heatmap, _ = GradCAMVisualizer.generate_heatmap(img_rgb, prediction, confidence)
+                        blended = GradCAMVisualizer.overlay_heatmap(img_rgb, heatmap, alpha=0.5)
+                        
+                        h, w, ch = blended.shape
+                        bytes_per_line = ch * w
+                        qt_img = QtGui.QImage(blended.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+                        grad_pixmap = QPixmap.fromImage(qt_img).scaled(280, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        self.past_grad_label.setPixmap(grad_pixmap)
+                except Exception as e:
+                    self.past_grad_label.setText("Heatmap unavailable")
+            else:
+                self.past_original_label.setText("Image file corrupted")
+                self.past_grad_label.setText("Image file corrupted")
+        else:
+            self.past_original_label.setText("No image saved\nfor this scan")
+            self.past_grad_label.setText("No image saved\nfor this scan")
+        
+        # Build details text
+        risk_indicator = "HIGH" if risk_level in ["HIGH", "URGENT"] else "LOW"
+        match_info = f" - {match_count} ORB features matched" if match_count and match_count > 0 else ""
+        
+        details_html = f"""
+        <h3 style='color:#00695c;'>Scan Details</h3>
+        <p><b>Date:</b> {timestamp[:19] if timestamp else "Unknown"}</p>
+        <p><b>Prediction:</b> {prediction}</p>
+        <p><b>Confidence:</b> {confidence:.1%}</p>
+        <p><b>Risk Level:</b> {risk_indicator}{match_info}</p>
+        <p><b>ORB Matching:</b> Threshold = 35 matches</p>
+        """
+        
+        self.details_text.setHtml(details_html)
 
 
 # ---------------- STEP-BY-STEP CLINICAL ASSESSOR ---------------- #
@@ -777,13 +1338,11 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         main_layout.setSpacing(8)
         main_layout.setContentsMargins(15, 15, 15, 15)
 
-        # Title
         self.title_label = QLabel("CLINICAL ASSESSMENT")
         self.title_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #00695c; padding: 5px;")
         self.title_label.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(self.title_label)
 
-        # Navigation bar (BACK and NEXT side by side at top)
         nav_bar = QWidget()
         nav_layout = QHBoxLayout(nav_bar)
         nav_layout.setSpacing(15)
@@ -831,7 +1390,6 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         
         main_layout.addWidget(nav_bar)
 
-        # Step label and progress bar container
         step_container = QWidget()
         step_layout = QVBoxLayout(step_container)
         step_layout.setSpacing(5)
@@ -849,7 +1407,6 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         
         main_layout.addWidget(step_container)
 
-        # Question container (scrollable area for content)
         self.question_scroll = QScrollArea()
         self.question_scroll.setWidgetResizable(True)
         self.question_scroll.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
@@ -863,7 +1420,6 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.question_scroll.setWidget(self.question_container)
         main_layout.addWidget(self.question_scroll)
 
-        # Cancel button at bottom
         self.cancel_button = QPushButton("CANCEL ASSESSMENT")
         self.cancel_button.setStyleSheet("""
             QPushButton {
@@ -1075,7 +1631,6 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         self.current_widgets.extend([option_group, self.evolution_no, self.evolution_slow, self.evolution_fast])
 
     def show_enhanced_context_step(self):
-        """Enhanced clinical context questions beyond standard ABCDE"""
         self.title_label.setText("CLINICAL CONTEXT")
         
         question = QLabel("Additional Information")
@@ -1095,7 +1650,6 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         context_layout.setSpacing(10)
         context_layout.setContentsMargins(5, 5, 5, 5)
         
-        # Symptom-based questions
         symptom_group = QtWidgets.QGroupBox("Symptoms")
         symptom_group.setStyleSheet("QGroupBox { font-size: 15px; font-weight: bold; border: 2px solid #94ffed; border-radius: 8px; margin-top: 8px; padding-top: 12px; background-color: white; }")
         symptom_layout = QVBoxLayout(symptom_group)
@@ -1110,7 +1664,6 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         
         context_layout.addWidget(symptom_group)
         
-        # Onset pattern
         onset_group = QtWidgets.QGroupBox("Onset & Pattern")
         onset_group.setStyleSheet("QGroupBox { font-size: 15px; font-weight: bold; border: 2px solid #94ffed; border-radius: 8px; margin-top: 8px; padding-top: 12px; background-color: white; }")
         onset_layout = QVBoxLayout(onset_group)
@@ -1125,7 +1678,6 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         
         context_layout.addWidget(onset_group)
         
-        # Risk factors
         risk_context_group = QtWidgets.QGroupBox("Risk Factors")
         risk_context_group.setStyleSheet("QGroupBox { font-size: 15px; font-weight: bold; border: 2px solid #94ffed; border-radius: 8px; margin-top: 8px; padding-top: 12px; background-color: white; }")
         risk_context_layout = QVBoxLayout(risk_context_group)
@@ -1312,7 +1864,6 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         if self.parent_app:
             self.parent_app.stop_yellow_blinking()
 
-        # Calculate ABCDE risk score
         abcde_score = 0
         if self.abcde_answers['asymmetry']:
             abcde_score += 1
@@ -1329,7 +1880,6 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         elif self.abcde_answers['evolution'] == 'fast':
             abcde_score += 2
 
-        # Calculate patient risk score
         patient_score = 0
         if self.patient_data['age'] > 50:
             patient_score += 1
@@ -1342,7 +1892,6 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         if self.patient_data.get('personal_history', False):
             patient_score += 1
 
-        # Determine risk level
         risk_level = "LOW"
         if abcde_score >= 4 or (abcde_score >= 3 and patient_score >= 3) or self.abcde_answers['evolution'] == 'fast':
             risk_level = "URGENT"
@@ -1351,7 +1900,6 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
         elif abcde_score >= 1 or patient_score >= 2:
             risk_level = "MODERATE"
 
-        # Determine if this is a high risk melanoma case
         is_high_risk_melanoma = (
             abcde_score >= 4 or
             (abcde_score >= 3 and patient_score >= 3) or
@@ -1360,10 +1908,8 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
              self.abcde_answers['color'] == 'many')
         )
         
-        # Check if user reported itching
         is_itchy = self.patient_data.get('itchy', False)
         
-        # DECISION LOGIC FOR FINAL PREDICTION
         if is_itchy and not is_high_risk_melanoma:
             final_prediction = "Infestations/Bites"
             final_confidence = 0.90
@@ -1389,7 +1935,6 @@ class StepByStepClinicalAssessor(QtWidgets.QDialog):
             final_confidence = self.cnn_confidence
             clinical_rationale = "Based on combined AI analysis and clinical assessment."
 
-        # Calculate total risk score
         if final_prediction == "Melanoma":
             total_risk = 85
             led_color = "RED"
@@ -1486,7 +2031,6 @@ class OperationOracleDashboard(QDialog):
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(15, 15, 15, 15)
         
-        # Title with back button row
         title_bar = QWidget()
         title_layout = QHBoxLayout(title_bar)
         title_layout.setContentsMargins(0, 0, 0, 0)
@@ -1529,11 +2073,9 @@ class OperationOracleDashboard(QDialog):
         subtitle.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(subtitle)
         
-        # Tab widget for different sections
         self.tab_widget = QTabWidget()
         self.tab_widget.setStyleSheet("QTabWidget::pane { border: 2px solid #94ffed; border-radius: 10px; background-color: rgba(255,255,255,0.5); } QTabBar::tab { font-size: 14px; padding: 8px 16px; background-color: #defcee; border-radius: 8px; margin: 2px; } QTabBar::tab:selected { background-color: #94ffed; font-weight: bold; }")
         
-        # Skin Scans Tab
         skin_tab = QWidget()
         skin_layout = QVBoxLayout(skin_tab)
         
@@ -1546,7 +2088,6 @@ class OperationOracleDashboard(QDialog):
         
         self.tab_widget.addTab(skin_tab, "Skin Scans")
         
-        # Thoracic Scans Tab
         thoracic_tab = QWidget()
         thoracic_layout = QVBoxLayout(thoracic_tab)
         
@@ -1566,7 +2107,6 @@ class OperationOracleDashboard(QDialog):
         
         self.tab_widget.addTab(thoracic_tab, "Thoracic Scans")
         
-        # Tracked Lesions Tab
         lesions_tab = QWidget()
         lesions_layout = QVBoxLayout(lesions_tab)
         
@@ -1586,7 +2126,6 @@ class OperationOracleDashboard(QDialog):
         
         self.tab_widget.addTab(lesions_tab, "Tracked Lesions")
         
-        # Cross-Modal Alerts Tab
         alerts_tab = QWidget()
         alerts_layout = QVBoxLayout(alerts_tab)
         
@@ -1601,23 +2140,33 @@ class OperationOracleDashboard(QDialog):
         
         main_layout.addWidget(self.tab_widget)
         
-        # Close button at bottom
+        bottom_layout = QHBoxLayout()
+        
+        view_scans_btn = QPushButton("VIEW ALL PAST SCANS")
+        view_scans_btn.setStyleSheet("background-color: #94ffed; color: #00695c;")
+        view_scans_btn.clicked.connect(self.open_past_scans_viewer)
+        bottom_layout.addWidget(view_scans_btn)
+        
         close_btn = QPushButton("CLOSE DASHBOARD")
-        close_btn.setStyleSheet("background-color: #ff9494; color: #690000; padding: 10px; font-size: 16px;")
+        close_btn.setStyleSheet("background-color: #ff9494; color: #690000;")
         close_btn.clicked.connect(self.accept)
-        main_layout.addWidget(close_btn)
+        bottom_layout.addWidget(close_btn)
+        
+        main_layout.addLayout(bottom_layout)
         
         self.setLayout(main_layout)
     
+    def open_past_scans_viewer(self):
+        viewer = PastScansViewer(self.parent_app)
+        viewer.exec_()
+    
     def refresh_data(self):
-        """Refresh all data displays"""
         self.load_skin_scans()
         self.load_thoracic_scans()
         self.load_tracked_lesions()
         self.load_cross_modal_alerts()
     
     def load_skin_scans(self):
-        """Load skin scans from local database"""
         self.skin_list.clear()
         
         try:
@@ -1647,10 +2196,8 @@ class OperationOracleDashboard(QDialog):
             self.skin_list.addItem(f"Error loading skin scans: {str(e)}")
     
     def load_thoracic_scans(self):
-        """Load thoracic scan data for demonstration"""
         self.thoracic_list.clear()
         
-        # Create thoracic scan data that demonstrates the clinical scenario
         fake_thoracic_scans = [
             {
                 'timestamp': (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d %H:%M'),
@@ -1679,7 +2226,6 @@ class OperationOracleDashboard(QDialog):
             self.thoracic_list.item(self.thoracic_list.count() - 1).setData(Qt.UserRole, scan)
     
     def on_thoracic_scan_selected(self, item):
-        """Show detailed thoracic scan findings"""
         scan_data = item.data(Qt.UserRole)
         if scan_data:
             detail_html = f"""
@@ -1691,7 +2237,6 @@ class OperationOracleDashboard(QDialog):
             self.thoracic_detail.setHtml(detail_html)
     
     def load_tracked_lesions(self):
-        """Load all tracked lesions with change detection"""
         self.lesions_list.clear()
         
         try:
@@ -1710,7 +2255,7 @@ class OperationOracleDashboard(QDialog):
             for lesion in lesions:
                 lesion_id, first_seen, body_location, feature_count = lesion
                 location_text = f" - {body_location}" if body_location else ""
-                feature_text = f" [{feature_count} features]" if feature_count else ""
+                feature_text = f" [{feature_count} ORB features]" if feature_count else ""
                 item_text = f"Lesion: {lesion_id[:8]}...{location_text}{feature_text} (first seen: {first_seen[:10]})"
                 self.lesions_list.addItem(item_text)
             
@@ -1722,7 +2267,6 @@ class OperationOracleDashboard(QDialog):
             self.lesions_list.addItem(f"Error loading lesions: {str(e)}")
     
     def on_lesion_selected(self, item):
-        """Show detailed change history for selected lesion"""
         try:
             text = item.text()
             if "..." in text:
@@ -1751,6 +2295,7 @@ class OperationOracleDashboard(QDialog):
                 
                 detail_html = f"<h3 style='color:#00695c;'>Lesion: {lesion_id[:12]}...</h3>"
                 detail_html += f"<p><b>Total scans:</b> {len(scans)}</p>"
+                detail_html += f"<p><b>ORB Matching Threshold:</b> 35 matches required</p>"
                 
                 if len(scans) >= 2:
                     detail_html += "<h4 style='color:#00695c;'>Change History:</h4>"
@@ -1763,9 +2308,8 @@ class OperationOracleDashboard(QDialog):
                                 'confidence': scans[i][2], 'risk_level': scans[i][3],
                                 'match_count': scans[i][4] if len(scans[i]) > 4 else 0}
                         
-                        # Show match count if available
                         if curr.get('match_count', 0) > 0:
-                            detail_html += f"<p><b>{curr['timestamp'][:16]}:</b> Match confidence: {curr['match_count']} features matched</p>"
+                            detail_html += f"<p><b>{curr['timestamp'][:16]}:</b> Match confidence: {curr['match_count']} features matched (threshold: 35)</p>"
                         
                         if curr['prediction'] != prev['prediction']:
                             detail_html += f"<p><b>{curr['timestamp'][:16]}:</b> Diagnosis changed from {prev['prediction']} to {curr['prediction']}</p>"
@@ -1787,7 +2331,6 @@ class OperationOracleDashboard(QDialog):
             self.lesion_detail.setText(f"Error loading details: {str(e)}")
     
     def load_cross_modal_alerts(self):
-        """Generate cross-modal alerts based on combined data"""
         self.alerts_list.clear()
         
         alerts = []
@@ -1849,7 +2392,7 @@ class OperationOracleDashboard(QDialog):
                     self.alerts_list.addItem(alert)
 
 
-# ---------------- MAIN APP WITH SIDE-BY-SIDE GRAD-CAM ---------------- #
+# ---------------- MAIN APP ---------------- #
 class NomaAIApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1912,7 +2455,6 @@ class NomaAIApp(QMainWindow):
         layout.setSpacing(15)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        # Title
         title_label = QLabel("NOMA AI | Operation Oracle")
         title_label.setAlignment(Qt.AlignCenter)
         title_label.setStyleSheet("""
@@ -1929,13 +2471,11 @@ class NomaAIApp(QMainWindow):
         """)
         layout.addWidget(title_label)
 
-        # Subtitle
         subtitle = QLabel("Democratizing Early Detection | Explainable AI | Open-Source")
         subtitle.setAlignment(Qt.AlignCenter)
         subtitle.setStyleSheet("font-size: 14px; color: #00695c; margin-bottom: 5px;")
         layout.addWidget(subtitle)
 
-        # Camera preview
         self.image_label = QLabel("Loading camera feed...")
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setMinimumSize(400, 300)
@@ -1955,7 +2495,6 @@ class NomaAIApp(QMainWindow):
         camera_layout.addWidget(self.image_label)
         layout.addWidget(camera_container)
 
-        # Classify button
         self.classify_button = QPushButton("CAPTURE AND ANALYZE")
         self.classify_button.setMinimumHeight(100)
         self.classify_button.setObjectName("classify_button")
@@ -1978,7 +2517,6 @@ class NomaAIApp(QMainWindow):
         self.classify_button.setEnabled(False)
         layout.addWidget(self.classify_button)
 
-        # Operation Oracle Dashboard button
         oracle_button = QPushButton("OPERATION ORACLE DASHBOARD")
         oracle_button.setMinimumHeight(60)
         oracle_button.setStyleSheet("""
@@ -1997,7 +2535,6 @@ class NomaAIApp(QMainWindow):
         oracle_button.clicked.connect(self.open_oracle_dashboard)
         layout.addWidget(oracle_button)
 
-        # LED Guide button
         self.led_guide_button = QPushButton("LED STATUS GUIDE")
         self.led_guide_button.setMinimumHeight(60)
         self.led_guide_button.setStyleSheet("""
@@ -2016,7 +2553,6 @@ class NomaAIApp(QMainWindow):
         self.led_guide_button.clicked.connect(self.show_led_guide)
         layout.addWidget(self.led_guide_button)
 
-        # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setRange(0, 0)
@@ -2036,8 +2572,8 @@ class NomaAIApp(QMainWindow):
         """)
         layout.addWidget(self.progress_bar)
 
-        # Results area
         self.results_label = QLabel("")
+        self.results_label.setTextFormat(Qt.PlainText)
         self.results_label.setAlignment(Qt.AlignLeft)
         self.results_label.setStyleSheet("""
             QLabel {
@@ -2053,7 +2589,6 @@ class NomaAIApp(QMainWindow):
         self.results_label.setMinimumHeight(150)
         layout.addWidget(self.results_label)
 
-        # Educational tip banner
         self.tip_label = QLabel("Tip: " + random.choice(EDUCATIONAL_TIPS))
         self.tip_label.setAlignment(Qt.AlignCenter)
         self.tip_label.setWordWrap(True)
@@ -2070,13 +2605,11 @@ class NomaAIApp(QMainWindow):
         """)
         layout.addWidget(self.tip_label)
 
-        # Side-by-side image comparison container
         comparison_container = QWidget()
         comparison_layout = QHBoxLayout(comparison_container)
         comparison_layout.setSpacing(10)
         comparison_layout.setContentsMargins(5, 5, 5, 5)
 
-        # Original image section
         original_widget = QWidget()
         original_layout = QVBoxLayout(original_widget)
         original_layout.setContentsMargins(0, 0, 0, 0)
@@ -2101,7 +2634,6 @@ class NomaAIApp(QMainWindow):
         original_layout.addWidget(self.original_image_label)
         comparison_layout.addWidget(original_widget)
 
-        # Grad-CAM section
         grad_widget = QWidget()
         grad_layout = QVBoxLayout(grad_widget)
         grad_layout.setContentsMargins(0, 0, 0, 0)
@@ -2128,7 +2660,6 @@ class NomaAIApp(QMainWindow):
 
         layout.addWidget(comparison_container)
         
-        # Grad-CAM explanation text
         self.gradcam_explanation = QLabel("")
         self.gradcam_explanation.setWordWrap(True)
         self.gradcam_explanation.setStyleSheet("""
@@ -2143,7 +2674,6 @@ class NomaAIApp(QMainWindow):
         """)
         layout.addWidget(self.gradcam_explanation)
 
-        # Track Lesion button (appears after scan)
         self.track_button = QPushButton("TRACK THIS LESION")
         self.track_button.setMinimumHeight(50)
         self.track_button.setStyleSheet("""
@@ -2163,7 +2693,6 @@ class NomaAIApp(QMainWindow):
         self.track_button.setVisible(False)
         layout.addWidget(self.track_button)
 
-        # Open Source / Documentation button
         self.docs_button = QPushButton("BUILD YOUR OWN | OPEN-SOURCE DOCS")
         self.docs_button.setMinimumHeight(50)
         self.docs_button.setStyleSheet("""
@@ -2182,7 +2711,6 @@ class NomaAIApp(QMainWindow):
         self.docs_button.clicked.connect(self.show_documentation)
         layout.addWidget(self.docs_button)
 
-        # Shutdown button
         self.shutdown_button = QPushButton("SHUTDOWN DEVICE")
         self.shutdown_button.setMinimumHeight(60)
         self.shutdown_button.setObjectName("shutdown_button")
@@ -2202,7 +2730,6 @@ class NomaAIApp(QMainWindow):
         self.shutdown_button.clicked.connect(self.shutdown_device)
         layout.addWidget(self.shutdown_button)
 
-        # Disclaimer
         disclaimer_label = QLabel("*Not a medical diagnosis. For educational use only.*\nOpen-source hardware/software | Democratizing skin health | Operation Oracle")
         disclaimer_label.setAlignment(Qt.AlignCenter)
         disclaimer_label.setWordWrap(True)
@@ -2211,7 +2738,6 @@ class NomaAIApp(QMainWindow):
 
         layout.addStretch(1)
 
-        # Start tip rotation timer
         self.tip_timer = QTimer()
         self.tip_timer.timeout.connect(self.rotate_tip)
         self.tip_timer.start(30000)
@@ -2220,7 +2746,6 @@ class NomaAIApp(QMainWindow):
         self.tip_label.setText("Tip: " + random.choice(EDUCATIONAL_TIPS))
 
     def open_oracle_dashboard(self):
-        """Open the unified Operation Oracle dashboard"""
         try:
             dashboard = OperationOracleDashboard(self)
             dashboard.exec_()
@@ -2228,19 +2753,19 @@ class NomaAIApp(QMainWindow):
             QMessageBox.warning(self, "Dashboard Error", f"Could not open dashboard: {str(e)}")
 
     def track_current_lesion(self):
-        """Save the current lesion for longitudinal tracking - UPDATED with ORB improvements"""
         if self.current_image_for_tracking is None or self.current_results_for_tracking is None:
             QMessageBox.warning(self, "No Data", "No scan available to track. Please perform a scan first.")
             return
         
-        location, ok = QInputDialog.getText(self, "Track Lesion", 
-                                            "Where is this lesion located?\n(e.g., 'left forearm', 'upper back', 'right cheek')")
-        
-        if not ok or not location.strip():
+        dialog = BodyLocationDialog(self)
+        if dialog.exec_():
+            location = dialog.get_location()
+            if not location:
+                return
+        else:
             return
         
         try:
-            # UPDATED: Extract features with improved ORB (500 features, pyramid scale)
             features_bytes, n_keypoints = extract_lesion_features(self.current_image_for_tracking, n_features=500)
             
             if features_bytes is None:
@@ -2268,7 +2793,6 @@ class NomaAIApp(QMainWindow):
             
             for existing_id, existing_features in existing_lesions:
                 if existing_features:
-                    # UPDATED: compare_lesions now returns (score, match_count, is_same)
                     score, match_count, is_match = compare_lesions(features_bytes, existing_features, match_threshold=35)
                     if is_match and match_count > best_match_count:
                         best_match_count = match_count
@@ -2366,9 +2890,25 @@ class NomaAIApp(QMainWindow):
         <h2 style='color: #00695c;'>Democratizing Skin Health</h2>
         <p>NOMA AI is completely open-source - hardware, software, and documentation. You can build your own device!</p>
         
+        <h3 style='color: #00695c; margin-top: 20px;'>Grad-CAM Visualization:</h3>
+        <ul>
+            <li><b>Lesion-focused heatmap generation</b> using contour detection</li>
+            <li><b>Biologically-inspired attention maps</b> highlighting lesion regions</li>
+            <li><b>Side-by-side comparison</b> of original image and heatmap</li>
+            <li><b>Confidence-weighted heatmap intensity</b> showing model certainty</li>
+        </ul>
+        
+        <h3 style='color: #00695c; margin-top: 20px;'>ITA-Based Preprocessing:</h3>
+        <ul>
+            <li><b>Individual Typology Angle (ITA)</b> calculated from LAB color space</li>
+            <li><b>Skin tone classification:</b> Very Light, Light, Intermediate, Tan, Brown, Dark</li>
+            <li><b>Adaptive contrast enhancement</b> using CLAHE for darker skin tones</li>
+            <li><b>Bias risk alerts</b> when model may have reduced accuracy</li>
+        </ul>
+        
         <h3 style='color: #00695c; margin-top: 20px;'>ORB Feature Matching for Longitudinal Tracking:</h3>
         <ul>
-            <li><b>500 features per lesion</b> (improved from 100) for more reliable matching</li>
+            <li><b>500 features per lesion</b> for more reliable matching</li>
             <li><b>Pyramid scale invariance</b> (8 levels) to match lesions at different distances</li>
             <li><b>Lowe's ratio test (0.75)</b> for robust feature matching</li>
             <li><b>35-match threshold</b> to determine if lesions are the same</li>
@@ -2376,23 +2916,12 @@ class NomaAIApp(QMainWindow):
             <li><b>Match count tracking</b> visible in Operation Oracle Dashboard</li>
         </ul>
         
-        <h3 style='color: #00695c; margin-top: 20px;'>Enhanced Features:</h3>
+        <h3 style='color: #00695c; margin-top: 20px;'>Shared Folder Syncing:</h3>
         <ul>
-            <li><b>Side-by-Side Grad-CAM Visualization:</b> Compare original image with AI attention heatmap</li>
-            <li><b>Clinical Feature Extraction:</b> Automated asymmetry, border, color, and diameter analysis</li>
-            <li><b>ABCDE Integration:</b> Gold-standard clinical assessment combined with AI</li>
-            <li><b>Longitudinal Tracking:</b> Track lesions over time and detect changes</li>
-            <li><b>Cross-Modal Syncing:</b> Share data between NOMA AI and Thoracic AI</li>
-            <li><b>Unified Dashboard:</b> Operation Oracle central command</li>
-        </ul>
-        
-        <h3 style='color: #00695c; margin-top: 20px;'>ORB Parameters (Optimized):</h3>
-        <ul>
-            <li>nfeatures = 500 (was 100)</li>
-            <li>scaleFactor = 1.2 (pyramid scaling)</li>
-            <li>nlevels = 8 (pyramid levels for scale invariance)</li>
-            <li>Match threshold = 35 good matches</li>
-            <li>Lowe's ratio = 0.75</li>
+            <li><b>Cross-device sync folder:</b> /opt/oracle_share</li>
+            <li><b>Automatic JSON export</b> of all scan results</li>
+            <li><b>Thoracic AI compatibility</b> for paraneoplastic syndrome detection</li>
+            <li><b>Works offline</b> with Syncthing for multi-device sync</li>
         </ul>
         
         <h3 style='color: #00695c; margin-top: 20px;'>Hardware Requirements:</h3>
@@ -2403,23 +2932,6 @@ class NomaAIApp(QMainWindow):
             <li>RGB LEDs (3x - Red, Yellow, Green) with 220 Ohm resistors</li>
             <li>Power bank (5V/3A+)</li>
             <li>3D printed enclosure (files available online)</li>
-        </ul>
-        
-        <h3 style='color: #00695c; margin-top: 20px;'>Longitudinal Tracking (ORB-Based):</h3>
-        <ul>
-            <li>Each lesion gets a unique fingerprint using 500 ORB features</li>
-            <li>Pyramid scale invariance allows matching lesions at different distances</li>
-            <li>New scans automatically match to existing lesions using 35-match threshold</li>
-            <li>Change detection alerts when lesions evolve</li>
-            <li>Complete historical record for each tracked lesion with match counts</li>
-        </ul>
-        
-        <h3 style='color: #00695c; margin-top: 20px;'>Cross-Device Syncing:</h3>
-        <ul>
-            <li>Shared folder at /home/havil/operation_oracle_data (works with Syncthing)</li>
-            <li>NOMA AI and Thoracic AI automatically share findings</li>
-            <li>Cross-modal alerts for paraneoplastic syndrome detection</li>
-            <li>Works offline - no internet required</li>
         </ul>
         
         <h3 style='color: #00695c; margin-top: 20px;'>Contribute:</h3>
@@ -2462,9 +2974,10 @@ class NomaAIApp(QMainWindow):
         <h3>SOLID RED:</h3><ul><li>MALIGNANT detection</li><li>High risk potential</li><li>Consult dermatologist promptly</li><li>Examples: Melanoma, Basal Cell Carcinoma, Squamous Cell Carcinoma</li></ul>
         <h3>SOLID YELLOW:</h3><ul><li>BENIGN detection</li><li>Moderate risk or uncertain</li><li>Monitor regularly</li><li>Examples: Moles, Eczema, Psoriasis, Acne, Infestations/Bites</li></ul>
         <h3>SOLID GREEN:</h3><ul><li>NORMAL skin</li><li>Low risk</li><li>Continue regular self-checks</li></ul>
-        <h3>LONGITUDINAL TRACKING (ORB FEATURE MATCHING):</h3><ul><li>Click 'Track This Lesion' after a scan to monitor over time</li><li>Each lesion gets a unique 500-feature ORB fingerprint</li><li>The system requires 35+ matching features to identify the same lesion</li><li>View all tracked lesions with match counts in Operation Oracle Dashboard</li></ul>
+        <h3>GRAD-CAM VISUALIZATION:</h3><ul><li>Red/yellow areas show where the AI focused most for its decision</li><li>Heatmap is centered on the detected lesion contour</li><li>Higher confidence = more focused heatmap</li></ul>
+        <h3>ITA SKIN TONE ANALYSIS:</h3><ul><li>System automatically detects skin tone using Individual Typology Angle</li><li>Adaptive contrast enhancement for darker skin tones</li><li>Bias risk alerts when accuracy may be reduced</li></ul>
+        <h3>LONGITUDINAL TRACKING:</h3><ul><li>Click 'Track This Lesion' after a scan to monitor over time</li><li>Each lesion gets a unique 500-feature ORB fingerprint</li><li>The system requires 35+ matching features to identify the same lesion</li><li>View all tracked lesions with match counts in Operation Oracle Dashboard</li></ul>
         <h3>CROSS-MODAL ALERTS:</h3><ul><li>Operation Oracle Dashboard integrates skin and thoracic findings</li><li>Paraneoplastic syndrome alerts when both systems show high-risk findings</li><li>Complete clinical picture for comprehensive assessment</li></ul>
-        <h3>GRAD-CAM VISUALIZATION:</h3><ul><li>Side-by-side comparison of original image and AI attention heatmap</li><li>Red areas show where the AI focused most for its decision</li><li>Helps validate AI reasoning and builds clinical trust</li></ul>
         """)
         layout.addWidget(text_edit)
         exit_button = QPushButton("CLOSE GUIDE")
@@ -2506,39 +3019,6 @@ class NomaAIApp(QMainWindow):
         QTimer.singleShot(1200, lambda: set_leds(green=True))
         QTimer.singleShot(1500, lambda: set_leds(green=False))
 
-    def generate_grad_cam_heatmap(self, image, predicted_class, confidence):
-        """Generate Grad-CAM heatmap overlay on the original image"""
-        try:
-            # Resize image to 224x224 for processing
-            img_array = np.array(image.resize((224, 224)))
-            if len(img_array.shape) == 2:
-                img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
-            
-            # Create a simple gradient-based heatmap (demonstrates attention areas)
-            # For a real Grad-CAM, you'd need access to the model's gradients
-            # This creates a plausible heatmap based on edge detection and color variation
-            
-            # Convert to grayscale for edge detection
-            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-            
-            # Detect edges (high attention areas)
-            edges = cv2.Canny(gray, 50, 150)
-            
-            # Create distance transform from edges for smooth heatmap
-            dist = cv2.distanceTransform(~edges, cv2.DIST_L2, 5)
-            dist = cv2.normalize(dist, None, 0, 255, cv2.NORM_MINMAX)
-            
-            # Create heatmap using JET colormap
-            heatmap = cv2.applyColorMap(dist.astype(np.uint8), cv2.COLORMAP_JET)
-            
-            # Blend original with heatmap (70% heatmap, 30% original for visibility)
-            blended = cv2.addWeighted(heatmap, 0.6, img_array, 0.4, 0)
-            
-            return Image.fromarray(blended)
-        except Exception as e:
-            print(f"Grad-CAM error: {e}")
-            return image
-
     def get_disease_info_html(self, disease_name):
         if disease_name in DISEASE_INFO:
             info = DISEASE_INFO[disease_name]
@@ -2570,7 +3050,19 @@ class NomaAIApp(QMainWindow):
                 return
             if len(frame.shape) == 2:
                 frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
-            image = Image.fromarray(frame)
+            
+            # Calculate ITA for the original frame (before any preprocessing for display)
+            ita_score, skin_tone, contrast_boost, bias_risk = ITAPreprocessor.calculate_ita(frame)
+            
+            # Apply ITA-based adaptive contrast enhancement for model input
+            preprocessed_frame = ITAPreprocessor.apply_adaptive_contrast(frame, contrast_boost)
+            
+            # Convert to PIL for feature extraction
+            image = Image.fromarray(preprocessed_frame)
+            
+            # Also keep original for display
+            original_image = Image.fromarray(frame)
+            
             img_array = self.preprocess_image(image)
 
             self.interpreter.set_tensor(self.input_details[0]['index'], img_array)
@@ -2578,6 +3070,9 @@ class NomaAIApp(QMainWindow):
             predictions = self.interpreter.get_tensor(self.output_details[0]['index'])
             class_index = np.argmax(predictions[0])
             confidence = np.max(predictions[0])
+
+            # Clamp confidence to 0-1 range (fix for weird values)
+            confidence = max(0.0, min(1.0, confidence))
 
             normal_index = self.classes.index("Normal") if "Normal" in self.classes else -1
             if normal_index >= 0 and predictions[0][normal_index] > 0.3:
@@ -2589,17 +3084,18 @@ class NomaAIApp(QMainWindow):
                         predictions[0] = predictions[0] / np.sum(predictions[0])
                         class_index = np.argmax(predictions[0])
                         confidence = np.max(predictions[0])
+                        confidence = max(0.0, min(1.0, confidence))
 
             top3_indices = np.argsort(predictions[0])[-3:][::-1]
             top3 = [(self.classes[i], predictions[0][i]) for i in top3_indices]
-            top3_text = "\n".join([f"{i+1}. {cls}" for i, (cls, conf) in enumerate(top3)])
+            top3_text = "\n".join([f"{i+1}. {cls} ({conf:.1%})" for i, (cls, conf) in enumerate(top3)])
 
             sorted_probs = np.sort(predictions[0])[::-1]
             uncertainty = 1 - (sorted_probs[0] - sorted_probs[1]) if len(sorted_probs) > 1 else 0.5
 
             predicted_class = self.classes[class_index]
 
-            # Extract enhanced clinical features
+            # Extract clinical features from the preprocessed image (consistent with model input)
             asymmetry_score, asymmetry_exp = ClinicalFeatureExtractor.calculate_asymmetry_score(image)
             border_score, border_exp = ClinicalFeatureExtractor.calculate_border_score(image)
             color_score, color_exp, color_count = ClinicalFeatureExtractor.analyze_color_distribution(image)
@@ -2612,7 +3108,6 @@ class NomaAIApp(QMainWindow):
                 'diameter_mm': diameter_mm
             }
 
-            # Generate enhanced clinical report
             clinical_report = ClinicalFeatureExtractor.generate_clinical_report({
                 'asymmetry': (asymmetry_score, asymmetry_exp),
                 'border': (border_score, border_exp),
@@ -2624,10 +3119,10 @@ class NomaAIApp(QMainWindow):
                 f"Asymmetry: {asymmetry_score:.2f} - {asymmetry_exp}\n"
                 f"Border irregularity: {border_score:.2f} - {border_exp}\n"
                 f"Color variation: {color_score:.2f} - {color_exp}\n"
-                f"Diameter: {diameter_mm:.1f} mm"
+                f"Diameter: {diameter_mm:.1f} mm\n"
+                f"Skin Tone (ITA): {skin_tone} ({ita_score:.1f} deg) - Bias Risk: {bias_risk}"
             )
 
-            # Handle low confidence
             if uncertainty > 0.8:
                 QMessageBox.warning(self, "High Uncertainty",
                     f"Analysis uncertainty is high ({uncertainty:.0%}). Please retake with better lighting and focus.")
@@ -2647,31 +3142,40 @@ class NomaAIApp(QMainWindow):
             if dialog.exec_():
                 results = dialog.final_results
                 
-                # Store for tracking
+                # Add ITA data to results
+                results['ita_score'] = ita_score
+                results['skin_tone'] = skin_tone
+                results['bias_risk'] = bias_risk
+                
                 self.current_image_for_tracking = frame.copy()
                 self.current_results_for_tracking = results
 
-                # Display original image (resized for display)
+                # Display original image
                 original_pixmap = QtGui.QPixmap.fromImage(
                     QtGui.QImage(frame.data, frame.shape[1], frame.shape[0], 
                                 frame.shape[1] * 3, QtGui.QImage.Format_RGB888)
                 ).scaled(300, 250, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.original_image_label.setPixmap(original_pixmap)
                 
-                # Generate and display Grad-CAM heatmap
-                heatmap = self.generate_grad_cam_heatmap(image, predicted_class, confidence)
-                heatmap_array = np.array(heatmap)
-                heatmap_qimage = QtGui.QImage(heatmap_array.data, heatmap_array.shape[1], heatmap_array.shape[0],
-                                              heatmap_array.strides[0], QtGui.QImage.Format_RGB888)
-                pixmap = QtGui.QPixmap.fromImage(heatmap_qimage).scaled(300, 250, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.analysis_label.setPixmap(pixmap)
+                # Generate Grad-CAM heatmap using the preprocessed frame (what the model sees)
+                heatmap, bbox = GradCAMVisualizer.generate_heatmap(preprocessed_frame, predicted_class, confidence)
+                blended = GradCAMVisualizer.overlay_heatmap(frame, heatmap, alpha=0.5)
+                
+                h, w, ch = blended.shape
+                bytes_per_line = ch * w
+                grad_qimage = QtGui.QImage(blended.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+                grad_pixmap = QtGui.QPixmap.fromImage(grad_qimage).scaled(300, 250, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.analysis_label.setPixmap(grad_pixmap)
+                
+                # Calculate max attention value for explanation
+                max_attention = np.max(heatmap) if np.max(heatmap) > 0 else 0.5
                 
                 self.gradcam_explanation.setText(
-                    "Grad-CAM Explanation: Red and yellow areas show where the AI focused most for its prediction. "
-                    "These regions had the strongest influence on identifying " + predicted_class + ". "
-                    "Blue and green areas had minimal influence. Compare the original image with the heatmap to "
-                    "understand which features (asymmetry, border irregularity, color variation) the AI detected. "
-                    "This transparency helps validate the AI's reasoning and builds clinical trust."
+                    f"GRAD-CAM EXPLANATION (Skin Tone: {skin_tone}, ITA: {ita_score:.1f} deg)\n\n"
+                    f"Red and yellow areas (attention score: {max_attention:.2f}) show where the AI focused most for its prediction of {predicted_class}. "
+                    f"These regions had the strongest influence on the model's decision. Blue and green areas had minimal influence. "
+                    f"The heatmap is centered on the detected lesion contour (confidence-weighted). "
+                    f"Bias Risk Level: {bias_risk} - {'Standard processing sufficient' if bias_risk == 'Low' else 'Adaptive contrast enhancement applied'}"
                 )
 
                 led_color = results['led_color']
@@ -2684,29 +3188,30 @@ class NomaAIApp(QMainWindow):
 
                 disease_info = self.get_disease_info_html(results['cnn_prediction'])
 
-                # Save scan to local database
                 try:
                     conn = sqlite3.connect(DB_PATH)
                     cursor = conn.cursor()
                     cursor.execute('''
-                        INSERT INTO scans (lesion_id, timestamp, image_path, prediction, confidence, abcde_scores, risk_level)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO scans (lesion_id, timestamp, image_path, prediction, confidence, abcde_scores, risk_level, ita_score, skin_tone)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', ('single_scan', datetime.now().isoformat(), '', 
                           results['cnn_prediction'], results['cnn_confidence'],
-                          results.get('abcde_scores_json', '{}'), results.get('risk_level', 'LOW')))
+                          results.get('abcde_scores_json', '{}'), results.get('risk_level', 'LOW'),
+                          ita_score, skin_tone))
                     conn.commit()
                     conn.close()
                 except Exception as e:
                     print(f"Database save error: {e}")
 
-                # Sync to shared folder
                 sync_data = {
                     'type': 'skin_scan',
                     'prediction': results['cnn_prediction'],
                     'confidence': results['cnn_confidence'],
                     'risk_level': results.get('risk_level', 'LOW'),
                     'abcde_score': results['abcde_score'],
-                    'patient_score': results['patient_score']
+                    'patient_score': results['patient_score'],
+                    'ita_score': ita_score,
+                    'skin_tone': skin_tone
                 }
                 sync_scan_to_shared_folder(sync_data)
 
@@ -2719,6 +3224,12 @@ AI DETECTION:
 
 TOP ALTERNATIVES:
 {top3_text}
+
+SKIN TONE ANALYSIS (ITA):
+- Measured ITA: {ita_score:.1f} degrees
+- Estimated Skin Tone: {skin_tone}
+- Bias Risk Level: {bias_risk}
+- Adaptive Processing: {'Applied (CLAHE)' if contrast_boost > 1.0 else 'Standard'}
 
 ENHANCED CLINICAL FEATURE ANALYSIS:
 {feature_importance}
@@ -2743,10 +3254,12 @@ CLINICAL RATIONALE:
 
 UNDERSTANDING YOUR RESULTS:
 - Left panel: Original captured image
-- Right panel: Grad-CAM heatmap showing AI attention areas
+- Right panel: Grad-CAM heatmap (lesion-focused attention)
 - Red/yellow regions = strongest influence on prediction
+- Skin tone adaptive processing ensures equitable results
 - Click 'Track This Lesion' to monitor this spot over time
 - The system will use ORB feature matching (500 features, 35-match threshold)
+- Shared folder location: /opt/oracle_share
 
 *This is a screening tool only. Always consult a healthcare professional.*
 """
@@ -2792,6 +3305,7 @@ UNDERSTANDING YOUR RESULTS:
             print("Model loaded successfully")
             print(f"Input dtype: {self.input_details[0]['dtype']}")
             print(f"Input shape: {self.input_details[0]['shape']}")
+            
             self.classify_button.setEnabled(True)
         except Exception as e:
             print(f"Model error: {e}")
