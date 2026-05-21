@@ -898,7 +898,7 @@ class BodyLocationDialog(QDialog):
         return self.selected_location
 
 
-# ---------------- PAST SCANS VIEWER DIALOG (FIXED WITH SCROLL AND CONDITION DISPLAY) ---------------- #
+# ---------------- PAST SCANS VIEWER DIALOG (FIXED) ---------------- #
 class PastScansViewer(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -910,48 +910,21 @@ class PastScansViewer(QDialog):
         
     def initUI(self):
         self.setWindowTitle("Past Scans - Longitudinal History")
-        self.setMinimumSize(850, 650)
+        self.setMinimumSize(800, 600)
         self.setStyleSheet("""
             QDialog { background-color: #b8fcbf; }
             QLabel { font-size: 14px; }
             QPushButton { font-size: 14px; font-weight: bold; padding: 10px; border-radius: 8px; }
             QTextEdit { background-color: #f8fff8; border: 2px solid #94ffed; border-radius: 10px; font-size: 13px; }
-            QListWidget { 
-                background-color: white; 
-                border: 2px solid #94ffed; 
-                border-radius: 10px; 
-                padding: 10px;
-                font-size: 13px;
-            }
-            QComboBox { 
-                font-size: 14px; 
-                padding: 8px; 
-                border: 2px solid #94ffed; 
-                border-radius: 8px; 
-                background-color: white; 
-            }
-            QScrollArea {
-                border: none;
-            }
-            QScrollBar:vertical {
-                border: none;
-                background: #e0e0e0;
-                width: 12px;
-                margin: 0px;
-                border-radius: 6px;
-            }
-            QScrollBar::handle:vertical {
-                background: #94ffed;
-                min-height: 30px;
-                border-radius: 6px;
-            }
+            QListWidget { background-color: white; border: 2px solid #94ffed; border-radius: 10px; padding: 10px; }
+            QComboBox { font-size: 14px; padding: 8px; border: 2px solid #94ffed; border-radius: 8px; background-color: white; }
         """)
         
-        main_layout = QVBoxLayout()
-        main_layout.setSpacing(10)
-        main_layout.setContentsMargins(15, 15, 15, 15)
+        layout = QVBoxLayout()
+        layout.setSpacing(10)
+        layout.setContentsMargins(15, 15, 15, 15)
         
-        # Title with back button row (always visible)
+        # Title with back button row
         title_bar = QWidget()
         title_layout = QHBoxLayout(title_bar)
         title_layout.setContentsMargins(0, 0, 0, 0)
@@ -987,61 +960,25 @@ class PastScansViewer(QDialog):
         refresh_btn.clicked.connect(self.load_lesion_list)
         title_layout.addWidget(refresh_btn)
         
-        main_layout.addWidget(title_bar)
+        layout.addWidget(title_bar)
         
-        # Scrollable area for lesions list
-        lesions_group = QGroupBox("Select a tracked lesion:")
-        lesions_group.setStyleSheet("""
-            QGroupBox { 
-                font-size: 14px; 
-                font-weight: bold; 
-                border: 1px solid #94ffed; 
-                border-radius: 8px; 
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px 0 5px;
-            }
-        """)
-        lesions_layout = QVBoxLayout(lesions_group)
-        
-        # Scroll area for lesion list
-        lesion_scroll = QScrollArea()
-        lesion_scroll.setWidgetResizable(True)
-        lesion_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        lesion_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        lesion_scroll.setMinimumHeight(150)
-        lesion_scroll.setMaximumHeight(180)
-        lesion_scroll.setStyleSheet("""
-            QScrollArea {
-                border: none;
-                background-color: transparent;
-            }
-        """)
-        
+        # Lesion list
+        layout.addWidget(QLabel("Select a tracked lesion:"))
         self.lesion_list = QListWidget()
-        self.lesion_list.setMinimumHeight(130)
+        self.lesion_list.setMaximumHeight(150)
         self.lesion_list.itemClicked.connect(self.on_lesion_selected)
-        
-        lesion_scroll.setWidget(self.lesion_list)
-        lesions_layout.addWidget(lesion_scroll)
-        
-        main_layout.addWidget(lesions_group)
+        layout.addWidget(self.lesion_list)
         
         # Scan selector
         scan_layout = QHBoxLayout()
         scan_layout.addWidget(QLabel("Scan date:"))
         self.scan_combo = QComboBox()
-        self.scan_combo.setMinimumWidth(250)
         self.scan_combo.currentIndexChanged.connect(self.on_scan_selected)
         scan_layout.addWidget(self.scan_combo)
         scan_layout.addStretch()
-        main_layout.addLayout(scan_layout)
+        layout.addLayout(scan_layout)
         
-        # Image display area
+        # Image display
         image_container = QWidget()
         image_layout = QHBoxLayout(image_container)
         image_layout.setSpacing(15)
@@ -1055,7 +992,7 @@ class PastScansViewer(QDialog):
         original_layout.addWidget(original_title)
         self.past_original_label = QLabel("")
         self.past_original_label.setAlignment(Qt.AlignCenter)
-        self.past_original_label.setMinimumSize(320, 270)
+        self.past_original_label.setMinimumSize(300, 250)
         self.past_original_label.setStyleSheet("border: 2px solid #94ffed; border-radius: 10px; background-color: white;")
         original_layout.addWidget(self.past_original_label)
         image_layout.addWidget(original_widget)
@@ -1069,78 +1006,47 @@ class PastScansViewer(QDialog):
         grad_layout.addWidget(grad_title)
         self.past_grad_label = QLabel("")
         self.past_grad_label.setAlignment(Qt.AlignCenter)
-        self.past_grad_label.setMinimumSize(320, 270)
+        self.past_grad_label.setMinimumSize(300, 250)
         self.past_grad_label.setStyleSheet("border: 2px solid #94ffed; border-radius: 10px; background-color: white;")
         grad_layout.addWidget(self.past_grad_label)
         image_layout.addWidget(grad_widget)
         
-        main_layout.addWidget(image_container)
+        layout.addWidget(image_container)
         
-        # Details area with scroll
-        details_group = QGroupBox("Scan Details")
-        details_group.setStyleSheet("""
-            QGroupBox { 
-                font-size: 13px; 
-                font-weight: bold; 
-                border: 1px solid #94ffed; 
-                border-radius: 8px; 
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-        """)
-        details_layout = QVBoxLayout(details_group)
-        
-        details_scroll = QScrollArea()
-        details_scroll.setWidgetResizable(True)
-        details_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        details_scroll.setMinimumHeight(120)
-        details_scroll.setMaximumHeight(150)
-        
+        # Details
         self.details_text = QTextEdit()
         self.details_text.setReadOnly(True)
-        details_scroll.setWidget(self.details_text)
-        details_layout.addWidget(details_scroll)
-        
-        main_layout.addWidget(details_group)
+        self.details_text.setMaximumHeight(150)
+        layout.addWidget(self.details_text)
         
         # Close button at bottom
         close_btn = QPushButton("CLOSE")
-        close_btn.setStyleSheet("background-color: #ff9494; color: #690000; padding: 10px; font-size: 16px;")
+        close_btn.setStyleSheet("background-color: #ff9494; color: #690000; padding: 10px;")
         close_btn.clicked.connect(self.accept)
-        main_layout.addWidget(close_btn)
+        layout.addWidget(close_btn)
         
-        self.setLayout(main_layout)
+        self.setLayout(layout)
     
     def load_lesion_list(self):
-        """Load all tracked lesions from database with condition info"""
+        """Load all tracked lesions from database"""
         self.lesion_list.clear()
         try:
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
-            
-            # Get lesions with their latest scan info
-            cursor.execute('''
-                SELECT DISTINCT l.lesion_id, l.body_location, l.first_seen, l.feature_count,
-                    (SELECT prediction FROM scans WHERE lesion_id = l.lesion_id ORDER BY timestamp DESC LIMIT 1) as latest_prediction
-                FROM lesions l
-                ORDER BY l.first_seen DESC
-            ''')
-            
+            cursor.execute('SELECT lesion_id, body_location, first_seen, feature_count FROM lesions ORDER BY first_seen DESC')
             lesions = cursor.fetchall()
             conn.close()
             
             for lesion in lesions:
-                lesion_id, body_location, first_seen, feature_count, latest_prediction = lesion
+                lesion_id, body_location, first_seen, feature_count = lesion
                 feature_text = f" [{feature_count} features]" if feature_count else ""
-                location_text = body_location if body_location else "Unknown"
-                condition_text = f" - {latest_prediction}" if latest_prediction else ""
-                display_text = f"{location_text}{condition_text}{feature_text} - {first_seen[:10]}"
+                location_text = body_location if body_location else "Unknown location"
+                display_text = f"{location_text}{feature_text} - {first_seen[:10]}"
                 self.lesion_list.addItem(display_text)
                 self.lesion_list.item(self.lesion_list.count() - 1).setData(Qt.UserRole, lesion_id)
             
             if len(lesions) == 0:
                 self.lesion_list.addItem("No tracked lesions found")
-                self.lesion_list.addItem("Click 'Track This Lesion' after a scan to start monitoring")
                 
         except Exception as e:
             self.lesion_list.addItem(f"Error: {str(e)}")
@@ -1171,8 +1077,7 @@ class PastScansViewer(QDialog):
             for scan in self.scans:
                 scan_id, timestamp, image_path, prediction, confidence, risk_level, match_count = scan
                 display_time = timestamp[:16] if timestamp else "Unknown"
-                risk_icon = "[URGENT]" if risk_level in ["URGENT", "HIGH"] else "[LOW]"
-                self.scan_combo.addItem(f"{risk_icon} {display_time} - {prediction} ({confidence:.1%})")
+                self.scan_combo.addItem(f"{display_time} - {prediction}")
             
             if self.scans:
                 self.scan_combo.setCurrentIndex(0)
@@ -1198,7 +1103,7 @@ class PastScansViewer(QDialog):
         if image_path and os.path.exists(image_path):
             pixmap = QPixmap(image_path)
             if not pixmap.isNull():
-                scaled_pixmap = pixmap.scaled(320, 270, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                scaled_pixmap = pixmap.scaled(300, 250, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.past_original_label.setPixmap(scaled_pixmap)
                 
                 # Generate Grad-CAM for this image
@@ -1212,7 +1117,7 @@ class PastScansViewer(QDialog):
                         h, w, ch = blended.shape
                         bytes_per_line = ch * w
                         qt_img = QtGui.QImage(blended.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
-                        grad_pixmap = QPixmap.fromImage(qt_img).scaled(320, 270, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        grad_pixmap = QPixmap.fromImage(qt_img).scaled(300, 250, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                         self.past_grad_label.setPixmap(grad_pixmap)
                 except Exception as e:
                     self.past_grad_label.setText("Heatmap unavailable")
@@ -1230,13 +1135,14 @@ class PastScansViewer(QDialog):
         details_html = f"""
         <h3 style='color:#00695c;'>Scan Details</h3>
         <p><b>Date:</b> {timestamp[:19] if timestamp else "Unknown"}</p>
-        <p><b>Condition:</b> {prediction}</p>
+        <p><b>Prediction:</b> {prediction}</p>
         <p><b>Confidence:</b> {confidence:.1%}</p>
         <p><b>Risk Level:</b> {risk_indicator}{match_info}</p>
         <p><b>ORB Matching:</b> Threshold = 35 matches</p>
         """
         
         self.details_text.setHtml(details_html)
+
 
 # ---------------- STEP-BY-STEP CLINICAL ASSESSOR ---------------- #
 class StepByStepClinicalAssessor(QtWidgets.QDialog):
