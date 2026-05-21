@@ -898,7 +898,7 @@ class BodyLocationDialog(QDialog):
         return self.selected_location
 
 
-# ---------------- PAST SCANS VIEWER DIALOG (WITH SCROLL BARS) ---------------- #
+# ---------------- PAST SCANS VIEWER DIALOG (FIXED WITH SCROLL AND CONDITION DISPLAY) ---------------- #
 class PastScansViewer(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -923,9 +923,15 @@ class PastScansViewer(QDialog):
                 padding: 10px;
                 font-size: 13px;
             }
+            QComboBox { 
+                font-size: 14px; 
+                padding: 8px; 
+                border: 2px solid #94ffed; 
+                border-radius: 8px; 
+                background-color: white; 
+            }
             QScrollArea {
                 border: none;
-                background-color: transparent;
             }
             QScrollBar:vertical {
                 border: none;
@@ -939,36 +945,13 @@ class PastScansViewer(QDialog):
                 min-height: 30px;
                 border-radius: 6px;
             }
-            QScrollBar::handle:vertical:hover {
-                background: #80dfd0;
-            }
-            QScrollBar:horizontal {
-                border: none;
-                background: #e0e0e0;
-                height: 12px;
-                margin: 0px;
-                border-radius: 6px;
-            }
-            QScrollBar::handle:horizontal {
-                background: #94ffed;
-                min-width: 30px;
-                border-radius: 6px;
-            }
-            QComboBox { 
-                font-size: 14px; 
-                padding: 8px; 
-                border: 2px solid #94ffed; 
-                border-radius: 8px; 
-                background-color: white;
-                min-width: 200px;
-            }
         """)
         
-        layout = QVBoxLayout()
-        layout.setSpacing(10)
-        layout.setContentsMargins(15, 15, 15, 15)
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(15, 15, 15, 15)
         
-        # Title with back button row
+        # Title with back button row (always visible)
         title_bar = QWidget()
         title_layout = QHBoxLayout(title_bar)
         title_layout.setContentsMargins(0, 0, 0, 0)
@@ -1004,36 +987,49 @@ class PastScansViewer(QDialog):
         refresh_btn.clicked.connect(self.load_lesion_list)
         title_layout.addWidget(refresh_btn)
         
-        layout.addWidget(title_bar)
+        main_layout.addWidget(title_bar)
         
-        # Lesion list with scroll area
-        lesion_container = QWidget()
-        lesion_container_layout = QVBoxLayout(lesion_container)
-        lesion_container_layout.setContentsMargins(0, 0, 0, 0)
+        # Scrollable area for lesions list
+        lesions_group = QGroupBox("Select a tracked lesion:")
+        lesions_group.setStyleSheet("""
+            QGroupBox { 
+                font-size: 14px; 
+                font-weight: bold; 
+                border: 1px solid #94ffed; 
+                border-radius: 8px; 
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
+            }
+        """)
+        lesions_layout = QVBoxLayout(lesions_group)
         
-        lesion_container_layout.addWidget(QLabel("Select a tracked lesion:"))
-        
-        # Create scroll area for lesion list
+        # Scroll area for lesion list
         lesion_scroll = QScrollArea()
         lesion_scroll.setWidgetResizable(True)
         lesion_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         lesion_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        lesion_scroll.setMaximumHeight(150)
+        lesion_scroll.setMinimumHeight(150)
+        lesion_scroll.setMaximumHeight(180)
         lesion_scroll.setStyleSheet("""
             QScrollArea {
-                border: 2px solid #94ffed;
-                border-radius: 10px;
-                background-color: white;
+                border: none;
+                background-color: transparent;
             }
         """)
         
         self.lesion_list = QListWidget()
-        self.lesion_list.setSpacing(2)
+        self.lesion_list.setMinimumHeight(130)
         self.lesion_list.itemClicked.connect(self.on_lesion_selected)
-        lesion_scroll.setWidget(self.lesion_list)
-        lesion_container_layout.addWidget(lesion_scroll)
         
-        layout.addWidget(lesion_container)
+        lesion_scroll.setWidget(self.lesion_list)
+        lesions_layout.addWidget(lesion_scroll)
+        
+        main_layout.addWidget(lesions_group)
         
         # Scan selector
         scan_layout = QHBoxLayout()
@@ -1043,136 +1039,108 @@ class PastScansViewer(QDialog):
         self.scan_combo.currentIndexChanged.connect(self.on_scan_selected)
         scan_layout.addWidget(self.scan_combo)
         scan_layout.addStretch()
-        layout.addLayout(scan_layout)
+        main_layout.addLayout(scan_layout)
         
-        # Image display with scroll support
+        # Image display area
         image_container = QWidget()
         image_layout = QHBoxLayout(image_container)
         image_layout.setSpacing(15)
         
-        # Original image wrapper with scroll
-        original_wrapper = QScrollArea()
-        original_wrapper.setWidgetResizable(True)
-        original_wrapper.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        original_wrapper.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        original_wrapper.setMinimumSize(320, 280)
-        original_wrapper.setMaximumSize(320, 280)
-        original_wrapper.setStyleSheet("""
-            QScrollArea {
-                border: 2px solid #94ffed;
-                border-radius: 10px;
-                background-color: white;
-            }
-        """)
-        
+        # Original image
         original_widget = QWidget()
         original_layout = QVBoxLayout(original_widget)
-        original_layout.setContentsMargins(5, 5, 5, 5)
         original_title = QLabel("Original Image")
         original_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #00695c;")
         original_title.setAlignment(Qt.AlignCenter)
         original_layout.addWidget(original_title)
         self.past_original_label = QLabel("")
         self.past_original_label.setAlignment(Qt.AlignCenter)
-        self.past_original_label.setMinimumSize(280, 220)
-        self.past_original_label.setStyleSheet("border: none; background-color: transparent;")
+        self.past_original_label.setMinimumSize(320, 270)
+        self.past_original_label.setStyleSheet("border: 2px solid #94ffed; border-radius: 10px; background-color: white;")
         original_layout.addWidget(self.past_original_label)
-        original_layout.addStretch()
-        original_wrapper.setWidget(original_widget)
-        image_layout.addWidget(original_wrapper)
+        image_layout.addWidget(original_widget)
         
-        # Grad-CAM wrapper with scroll
-        grad_wrapper = QScrollArea()
-        grad_wrapper.setWidgetResizable(True)
-        grad_wrapper.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        grad_wrapper.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        grad_wrapper.setMinimumSize(320, 280)
-        grad_wrapper.setMaximumSize(320, 280)
-        grad_wrapper.setStyleSheet("""
-            QScrollArea {
-                border: 2px solid #94ffed;
-                border-radius: 10px;
-                background-color: white;
-            }
-        """)
-        
+        # Grad-CAM
         grad_widget = QWidget()
         grad_layout = QVBoxLayout(grad_widget)
-        grad_layout.setContentsMargins(5, 5, 5, 5)
         grad_title = QLabel("Grad-CAM Heatmap")
         grad_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #00695c;")
         grad_title.setAlignment(Qt.AlignCenter)
         grad_layout.addWidget(grad_title)
         self.past_grad_label = QLabel("")
         self.past_grad_label.setAlignment(Qt.AlignCenter)
-        self.past_grad_label.setMinimumSize(280, 220)
-        self.past_grad_label.setStyleSheet("border: none; background-color: transparent;")
+        self.past_grad_label.setMinimumSize(320, 270)
+        self.past_grad_label.setStyleSheet("border: 2px solid #94ffed; border-radius: 10px; background-color: white;")
         grad_layout.addWidget(self.past_grad_label)
-        grad_layout.addStretch()
-        grad_wrapper.setWidget(grad_widget)
-        image_layout.addWidget(grad_wrapper)
+        image_layout.addWidget(grad_widget)
         
-        layout.addWidget(image_container)
+        main_layout.addWidget(image_container)
         
-        # Details with scroll bar
-        detail_container = QWidget()
-        detail_container_layout = QVBoxLayout(detail_container)
-        detail_container_layout.setContentsMargins(0, 0, 0, 0)
-        
-        detail_label = QLabel("Scan Details")
-        detail_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #00695c;")
-        detail_container_layout.addWidget(detail_label)
-        
-        detail_scroll = QScrollArea()
-        detail_scroll.setWidgetResizable(True)
-        detail_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        detail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        detail_scroll.setMaximumHeight(180)
-        detail_scroll.setStyleSheet("""
-            QScrollArea {
-                border: 2px solid #94ffed;
-                border-radius: 10px;
-                background-color: #f8fff8;
+        # Details area with scroll
+        details_group = QGroupBox("Scan Details")
+        details_group.setStyleSheet("""
+            QGroupBox { 
+                font-size: 13px; 
+                font-weight: bold; 
+                border: 1px solid #94ffed; 
+                border-radius: 8px; 
+                margin-top: 10px;
+                padding-top: 10px;
             }
         """)
+        details_layout = QVBoxLayout(details_group)
+        
+        details_scroll = QScrollArea()
+        details_scroll.setWidgetResizable(True)
+        details_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        details_scroll.setMinimumHeight(120)
+        details_scroll.setMaximumHeight(150)
         
         self.details_text = QTextEdit()
         self.details_text.setReadOnly(True)
-        self.details_text.setStyleSheet("border: none; font-size: 13px; padding: 10px;")
-        detail_scroll.setWidget(self.details_text)
-        detail_container_layout.addWidget(detail_scroll)
+        details_scroll.setWidget(self.details_text)
+        details_layout.addWidget(details_scroll)
         
-        layout.addWidget(detail_container)
+        main_layout.addWidget(details_group)
         
         # Close button at bottom
         close_btn = QPushButton("CLOSE")
-        close_btn.setMinimumHeight(40)
         close_btn.setStyleSheet("background-color: #ff9494; color: #690000; padding: 10px; font-size: 16px;")
         close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn)
+        main_layout.addWidget(close_btn)
         
-        self.setLayout(layout)
+        self.setLayout(main_layout)
     
     def load_lesion_list(self):
-        """Load all tracked lesions from database"""
+        """Load all tracked lesions from database with condition info"""
         self.lesion_list.clear()
         try:
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
-            cursor.execute('SELECT lesion_id, body_location, first_seen, feature_count FROM lesions ORDER BY first_seen DESC')
+            
+            # Get lesions with their latest scan info
+            cursor.execute('''
+                SELECT DISTINCT l.lesion_id, l.body_location, l.first_seen, l.feature_count,
+                    (SELECT prediction FROM scans WHERE lesion_id = l.lesion_id ORDER BY timestamp DESC LIMIT 1) as latest_prediction
+                FROM lesions l
+                ORDER BY l.first_seen DESC
+            ''')
+            
             lesions = cursor.fetchall()
             conn.close()
             
             for lesion in lesions:
-                lesion_id, body_location, first_seen, feature_count = lesion
+                lesion_id, body_location, first_seen, feature_count, latest_prediction = lesion
                 feature_text = f" [{feature_count} features]" if feature_count else ""
-                location_text = body_location if body_location else "Unknown location"
-                display_text = f"{location_text}{feature_text} - {first_seen[:10]}"
+                location_text = body_location if body_location else "Unknown"
+                condition_text = f" - {latest_prediction}" if latest_prediction else ""
+                display_text = f"{location_text}{condition_text}{feature_text} - {first_seen[:10]}"
                 self.lesion_list.addItem(display_text)
                 self.lesion_list.item(self.lesion_list.count() - 1).setData(Qt.UserRole, lesion_id)
             
             if len(lesions) == 0:
                 self.lesion_list.addItem("No tracked lesions found")
+                self.lesion_list.addItem("Click 'Track This Lesion' after a scan to start monitoring")
                 
         except Exception as e:
             self.lesion_list.addItem(f"Error: {str(e)}")
@@ -1203,7 +1171,8 @@ class PastScansViewer(QDialog):
             for scan in self.scans:
                 scan_id, timestamp, image_path, prediction, confidence, risk_level, match_count = scan
                 display_time = timestamp[:16] if timestamp else "Unknown"
-                self.scan_combo.addItem(f"{display_time} - {prediction}")
+                risk_icon = "[URGENT]" if risk_level in ["URGENT", "HIGH"] else "[LOW]"
+                self.scan_combo.addItem(f"{risk_icon} {display_time} - {prediction} ({confidence:.1%})")
             
             if self.scans:
                 self.scan_combo.setCurrentIndex(0)
@@ -1229,7 +1198,7 @@ class PastScansViewer(QDialog):
         if image_path and os.path.exists(image_path):
             pixmap = QPixmap(image_path)
             if not pixmap.isNull():
-                scaled_pixmap = pixmap.scaled(280, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                scaled_pixmap = pixmap.scaled(320, 270, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.past_original_label.setPixmap(scaled_pixmap)
                 
                 # Generate Grad-CAM for this image
@@ -1243,7 +1212,7 @@ class PastScansViewer(QDialog):
                         h, w, ch = blended.shape
                         bytes_per_line = ch * w
                         qt_img = QtGui.QImage(blended.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
-                        grad_pixmap = QPixmap.fromImage(qt_img).scaled(280, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        grad_pixmap = QPixmap.fromImage(qt_img).scaled(320, 270, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                         self.past_grad_label.setPixmap(grad_pixmap)
                 except Exception as e:
                     self.past_grad_label.setText("Heatmap unavailable")
@@ -1261,14 +1230,13 @@ class PastScansViewer(QDialog):
         details_html = f"""
         <h3 style='color:#00695c;'>Scan Details</h3>
         <p><b>Date:</b> {timestamp[:19] if timestamp else "Unknown"}</p>
-        <p><b>Prediction:</b> {prediction}</p>
+        <p><b>Condition:</b> {prediction}</p>
         <p><b>Confidence:</b> {confidence:.1%}</p>
         <p><b>Risk Level:</b> {risk_indicator}{match_info}</p>
         <p><b>ORB Matching:</b> Threshold = 35 matches</p>
         """
         
         self.details_text.setHtml(details_html)
-
 
 # ---------------- STEP-BY-STEP CLINICAL ASSESSOR ---------------- #
 class StepByStepClinicalAssessor(QtWidgets.QDialog):
